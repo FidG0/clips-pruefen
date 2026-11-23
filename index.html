@@ -85,8 +85,18 @@ async function pcStand() {
   const t = data?.wert?.letzter_abgleich;
   if (!t) return $("#pcstand").textContent = "";
   const min = Math.round((Date.now() / 1000 - t) / 60);
-  $("#pcstand").textContent = min <= 2 ? "PC an" : "PC zuletzt vor " + (min < 120 ? min + " Min" : Math.round(min / 60) + " Std");
+  const an = min <= 2;
+  $("#pcstand").innerHTML = an ? `<a href="${PC}" style="color:var(--gruen)">PC an: volles Dashboard</a>` : "PC aus (zuletzt vor " + (min < 120 ? min + " Min" : Math.round(min / 60) + " Std") + ")";
+  // Eine Adresse für alles: PC an = einmal pro Sitzung automatisch ins volle Dashboard (über Tailscale).
+  // Klappt das nicht (Tailscale-App aus), führt „Zurück“ hierher und es wird nicht erneut umgeleitet.
+  const bleiben = new URLSearchParams(location.search).has("pruefen");
+  let versucht = false; try { versucht = sessionStorage.getItem("pc_versucht") === "1"; } catch (e) {}
+  if (an && !bleiben && !versucht) {
+    try { sessionStorage.setItem("pc_versucht", "1"); } catch (e) {}
+    location.href = PC;
+  }
 }
+const PC = "http://100.93.141.24:8800/";
 
 async function zeige() {
   pcStand();
