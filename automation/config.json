@@ -1,0 +1,32 @@
+{
+  "zeitzone": "Europe/Berlin",
+  "slots": ["16:00", "19:00", "20:30"],
+  "mindest_vorlauf_minuten": 30,
+  "max_posts_pro_tag": 3,
+  "buffer_kanal_name": "clipwreck",
+  "marker": "[posten]",
+  "storage_bucket": "vorschau",
+  "link_gueltig_tage": 14,
+  "hashtags_basis": ["#clipwreck", "#fyp", "#deutsch"],
+  "hashtags_nach_format": {
+    "GTA": ["#gta6", "#gta", "#gtarp"],
+    "Best of": ["#bestof", "#twitchclips"],
+    "IRL": ["#irl", "#twitch"],
+    "Top-5": ["#top5", "#ranking"]
+  },
+  "hashtags_nach_creator": {
+    "Papaplatte": ["#papaplatte"],
+    "Trymacs": ["#trymacs"],
+    "Zarbex": ["#zarbex"],
+    "Monte": ["#montanablack"],
+    "Eli": ["#eligella"]
+  },
+  "max_hashtags": 6,
+  "tracking_tage": 10,
+  "analyse": {
+    "mindest_anzahl_pro_gruppe": 4,
+    "max_aenderung_pro_lauf": 0.2,
+    "laengen_buckets": [[10, 15], [15, 20], [20, 25], [25, 35]],
+    "regelwerk_grenzen": {"laenge_min": 10, "laenge_max": 35}
+  }
+}

@@ -1,0 +1,27 @@
+name: Posten (Freigaben -> Buffer)
+# Alle 15 Minuten: neue "Posten"-Freigaben von der Handyseite in den nächsten Slot (16:00/19:00/20:30) planen.
+# Ohne Secret BUFFER_LIVE=ja nur Probelauf, es wird nichts gepostet.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+concurrency: posting
+permissions:
+  contents: read
+jobs:
+  posten:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_SECRET: ${{ secrets.SUPABASE_SECRET }}
+      BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+      BUFFER_LIVE: ${{ secrets.BUFFER_LIVE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Planen
+        if: env.SUPABASE_SECRET != ''
+        working-directory: automation
+        run: python3 posten.py
+      - name: Noch nicht eingerichtet
+        if: env.SUPABASE_SECRET == ''
+        run: echo "Secret SUPABASE_SECRET fehlt, Job übersprungen."
