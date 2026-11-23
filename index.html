@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Clips Prüfen</title>
+<style>
+  :root { --bg:#14111c; --karte:#1f1a2b; --linie:#352d48; --text:#f2eefa; --leise:#a99fbd; --gruen:#4ade80; --rot:#f87171; --gelb:#fbbf24; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { position:sticky; top:0; z-index:5; background:var(--bg); padding:12px 16px 8px; border-bottom:1px solid var(--linie); }
+  header h1 { margin:0; font-size:18px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  #pcstand { font-size:12px; color:var(--leise); font-weight:400; }
+  nav { display:flex; gap:6px; margin-top:8px; }
+  nav button { flex:1; }
+  main { padding:12px 16px 40px; max-width:560px; margin:0 auto; }
+  button, input, textarea { font:inherit; color:inherit; }
+  button { background:var(--karte); border:1px solid var(--linie); border-radius:10px; padding:10px 12px; cursor:pointer; }
+  button.an { border-color:var(--text); }
+  button.ja { background:var(--gruen); color:#0b1a10; border:0; font-weight:600; }
+  button.nein { background:transparent; border-color:var(--rot); color:var(--rot); }
+  input, textarea { width:100%; background:#0f0c16; border:1px solid var(--linie); border-radius:10px; padding:10px; }
+  textarea { min-height:64px; resize:vertical; }
+  .karte { background:var(--karte); border:1px solid var(--linie); border-radius:14px; padding:12px; margin-bottom:16px; }
+  .karte video { width:100%; max-height:70vh; background:#000; border-radius:10px; display:block; }
+  .kopf { display:flex; justify-content:space-between; gap:8px; font-size:13px; color:var(--leise); margin:8px 0 2px; }
+  .titel { font-weight:650; margin:2px 0 6px; }
+  .caption { white-space:pre-wrap; font-size:14px; color:var(--leise); max-height:7em; overflow:auto; }
+  .hinweis { font-size:13px; color:var(--gelb); margin-top:6px; }
+  .knoepfe { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px; }
+  .mehr { margin-top:8px; display:grid; gap:8px; }
+  .leer { color:var(--leise); text-align:center; padding:40px 0; }
+  .zeile { display:flex; justify-content:space-between; gap:8px; padding:10px 0; border-bottom:1px solid var(--linie); font-size:14px; }
+  .zeile span:last-child { color:var(--leise); white-space:nowrap; }
+  #login { display:grid; gap:10px; margin-top:20vh; }
+  .fehler { color:var(--rot); font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Clips Prüfen <span id="pcstand"></span></h1>
+  <nav id="nav" hidden>
+    <button data-ansicht="pruefen" class="an">Prüfen</button>
+    <button data-ansicht="erledigt">Erledigt</button>
+    <button id="abmelden">Abmelden</button>
+  </nav>
+</header>
+<main>
+  <form id="login" hidden>
+    <input id="mail" type="email" autocomplete="username" placeholder="E-Mail" required>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="Passwort" required>
+    <button class="ja" type="submit">Anmelden</button>
+    <div id="loginfehler" class="fehler"></div>
+  </form>
+  <div id="inhalt"></div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+const URL_ = "https://ycmecdixsdfhcspqeinw.supabase.co";
+const KEY = "sb_publishable_cyLyZvgu7N2RbPv58E7aBA_AigcopE6";   // öffentlich gedacht, Schutz über Login + Zeilenschutz
+const sb = supabase.createClient(URL_, KEY);
+let ansicht = "pruefen";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function start() {
+  const { data } = await sb.auth.getSession();
+  $("#login").hidden = !!data.session; $("#nav").hidden = !data.session;
+  if (data.session) zeige();
+}
+$("#login").onsubmit = async e => {
+  e.preventDefault();
+  const { error } = await sb.auth.signInWithPassword({ email: $("#mail").value.trim(), password: $("#pw").value });
+  $("#loginfehler").textContent = error ? "Anmeldung fehlgeschlagen: " + error.message : "";
+  if (!error) start();
+};
+$("#abmelden").onclick = async () => { await sb.auth.signOut(); $("#inhalt").innerHTML = ""; start(); };
+document.querySelectorAll("nav [data-ansicht]").forEach(b => b.onclick = () => {
+  ansicht = b.dataset.ansicht; document.querySelectorAll("nav [data-ansicht]").forEach(x => x.classList.toggle("an", x === b)); zeige();
+});
+
+async function pcStand() {
+  const { data } = await sb.from("info").select("wert").eq("schluessel", "pc").maybeSingle();
+  const t = data?.wert?.letzter_abgleich;
+  if (!t) return $("#pcstand").textContent = "";
+  const min = Math.round((Date.now() / 1000 - t) / 60);
+  $("#pcstand").textContent = min <= 2 ? "PC an" : "PC zuletzt vor " + (min < 120 ? min + " Min" : Math.round(min / 60) + " Std");
+}
+
+async function zeige() {
+  pcStand();
+  const ziel = $("#inhalt");
+  if (ansicht === "erledigt") {
+    const { data, error } = await sb.from("auftraege").select("id,aktion,kommentar,erstellt,erledigt,ergebnis,karten(titel)").order("id", { ascending: false }).limit(40);
+    if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
+    const name = { behalten: "Behalten", ablehnen: "Nicht behalten", ueberarbeiten: "Überarbeiten" };
+    ziel.innerHTML = data.length ? data.map(a => `<div class="zeile"><span>${name[a.aktion]}: ${esc(a.karten?.titel)}${a.kommentar ? "<br><small>„" + esc(a.kommentar) + "“</small>" : ""}</span>
+      <span>${a.erledigt ? "am PC erledigt" : "wartet auf PC"}</span></div>`).join("") : `<p class="leer">Noch keine Entscheidungen.</p>`;
+    return;
+  }
+  const [{ data: karten, error }, { data: wartend }] = await Promise.all([
+    sb.from("karten").select("*").eq("status", "pruefen").order("zeit", { ascending: false }),
+    sb.from("auftraege").select("karte_id").is("erledigt", null)]);
+  if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
+  const schon = new Set((wartend || []).map(a => a.karte_id));
+  const offen = karten.filter(k => !schon.has(k.id));
+  if (!offen.length) return ziel.innerHTML = `<p class="leer">Nichts zu prüfen. 🎉</p>`;
+  ziel.innerHTML = offen.map(k => `<div class="karte" id="k_${esc(k.id)}">
+    <video controls playsinline preload="none" data-pfad="${esc(k.vorschau)}"></video>
+    <div class="kopf"><span>${esc(k.kanal)} · ${esc(k.art || "")}</span><span>${k.punkte ? esc(k.punkte) + " Punkte" : ""}</span></div>
+    <div class="titel">${esc(k.titel)}</div>
+    <div class="caption">${esc(k.caption)}</div>
+    ${(k.hinweise || []).map(h => `<div class="hinweis">• ${esc(h)}</div>`).join("")}
+    <div class="knoepfe">
+      <button class="ja" data-a="behalten">Behalten</button>
+      <button data-a="ueberarbeiten">Überarbeiten</button>
+      <button class="nein" data-a="ablehnen">Nicht behalten</button>
+    </div>
+    <div class="mehr">
+      <textarea placeholder="Kommentar (warum, was ändern)"></textarea>
+      <input placeholder="Neuer Titel (optional)">
+    </div></div>`).join("");
+  const pfade = offen.map(k => k.vorschau).filter(Boolean);
+  if (pfade.length) {
+    const { data: links } = await sb.storage.from("vorschau").createSignedUrls(pfade, 3600);
+    const map = Object.fromEntries((links || []).map(l => [l.path, l.signedUrl]));
+    document.querySelectorAll("video[data-pfad]").forEach(v => { if (map[v.dataset.pfad]) v.src = map[v.dataset.pfad]; });
+  }
+  ziel.querySelectorAll(".karte").forEach(div => div.querySelectorAll("[data-a]").forEach(b => b.onclick = async () => {
+    const aktion = b.dataset.a, kommentar = div.querySelector("textarea").value.trim(), titel = div.querySelector("input").value.trim();
+    if (aktion === "ueberarbeiten" && !kommentar) return div.querySelector("textarea").focus();
+    const { data: s } = await sb.auth.getSession();
+    const { error } = await sb.from("auftraege").insert({ karte_id: div.id.slice(2), aktion, kommentar, titel: titel || null, von: s.session.user.id });
+    if (error) return alert(error.message);
+    div.remove();
+    if (!ziel.querySelector(".karte")) ziel.innerHTML = `<p class="leer">Nichts mehr zu prüfen. Der PC arbeitet die Entscheidungen ab, sobald er an ist.</p>`;
+  }));
+}
+start();
+</script>
+</body>
+</html>
