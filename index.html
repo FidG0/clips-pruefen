@@ -43,6 +43,7 @@
   <nav id="nav" hidden>
     <button data-ansicht="pruefen" class="an">Prüfen</button>
     <button data-ansicht="erledigt">Erledigt</button>
+    <button data-ansicht="videos">Videos</button>
     <button id="abmelden">Abmelden</button>
   </nav>
 </header>
@@ -101,6 +102,14 @@ const PC = "http://100.93.141.24:8800/";
 async function zeige() {
   pcStand();
   const ziel = $("#inhalt");
+  if (ansicht === "videos") {
+    const { data } = await sb.from("info").select("wert").eq("schluessel", "videos").maybeSingle();
+    const a = data?.wert?.aktuell, l = data?.wert?.liste || [];
+    ziel.innerHTML = (a ? `<div class="karte"><b>Gerade in Arbeit:</b> ${esc(a.titel)} <span style="color:var(--leise)">· ${esc(a.kanal)}</span><br>Schritt: ${esc(a.schritt)}${a.fortschritt != null ? " · " + a.fortschritt + " %" : ""}</div>`
+      : `<p class="leer" style="padding:12px 0">Gerade kein Video in Arbeit.</p>`)
+      + l.map(v => `<div class="zeile"><span><b style="color:${v.ergebnis === "genommen" ? "var(--gruen)" : "var(--leise)"}">${esc(v.ergebnis)}</b> ${esc(v.titel)}<br><small>${esc(v.grund)}</small></span><span>${esc(v.kanal)}</span></div>`).join("");
+    return;
+  }
   if (ansicht === "erledigt") {
     const { data, error } = await sb.from("auftraege").select("id,aktion,kommentar,erstellt,erledigt,ergebnis,karten(titel)").order("id", { ascending: false }).limit(40);
     if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
