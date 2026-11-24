@@ -345,7 +345,7 @@ async function naechste(ziel, gesamt) {
       </div>
       <div class="knoepfe"><button class="posten" data-a="posten" style="grid-column:1/-1" ${sperrgrund(k) ? "disabled" : ""}>${sperrgrund(k) ? "Posten gesperrt: " + esc(sperrgrund(k)) : "Posten (nächster Slot)"}</button></div>
       <div class="tipp">Karte wischen: rechts behalten, links verwerfen, hoch überarbeiten.</div>
-      <div class="tipp tastenhilfe">Tasten: J behalten · K verwerfen · R überarbeiten · P posten · Leertaste Play · N Notiz</div>
+      <div class="tipp tastenhilfe">Tasten: J behalten · N verwerfen · U überarbeiten · P posten · Leertaste Play · C Notiz</div>
     </div>`;
   // Video erst für die aktuelle Karte laden, die nächste Signatur schon vorholen (Video selbst bleibt ungeladen).
   signiert(BUCKET_VORSCHAU, vorschauPfad(k)).then(u => {
@@ -412,9 +412,10 @@ function wischen(el) {
 document.addEventListener("keydown", e => {
   if (ansicht !== "pruefen" || e.ctrlKey || e.metaKey || e.altKey || !$("#stapel")) return;
   if (e.target.closest?.("textarea,input")) { if (e.key === "Escape") e.target.blur(); return; }
-  const m = { j: "behalten", ArrowRight: "behalten", k: "ablehnen", ArrowLeft: "ablehnen", r: "ueberarbeiten", p: "posten" }[e.key];
+  // 24.11.: wie in der Zentrale J/N/U, die alten Tasten K und R gehen weiter
+  const m = { j: "behalten", ArrowRight: "behalten", n: "ablehnen", k: "ablehnen", ArrowLeft: "ablehnen", u: "ueberarbeiten", r: "ueberarbeiten", p: "posten" }[e.key];
   if (m) { e.preventDefault(); return entscheide(m); }
-  if (e.key === "n") { e.preventDefault(); $("#notiz").focus(); }
+  if (e.key === "c") { e.preventDefault(); $("#notiz").focus(); }
   if (e.key === " ") { e.preventDefault(); const v = $("#video"); if (v) v.paused ? v.play() : v.pause(); }
 });
 start();
