@@ -1,9 +1,9 @@
 name: Posten (Freigaben -> Buffer)
-# Alle 15 Minuten: neue "Posten"-Freigaben von der Handyseite in den nächsten Slot (16:00/19:00/20:30) planen.
+# Alle 15 Minuten (Minute 7/22/37/52, nicht zur vollen Stunde, da GitHub dort Läufe verwirft): neue "Posten"-Freigaben von der Handyseite in den nächsten Slot (16:00/19:00/20:30) planen.
 # Ohne Secret BUFFER_LIVE=ja nur Probelauf. Gesperrt bleibt: Ton-Ampel nicht grün, alte Charge ohne Original, Glücksspiel.
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
 concurrency: posting
 permissions:
