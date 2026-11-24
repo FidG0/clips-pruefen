@@ -184,21 +184,21 @@ async function zeige() {
       <span>${a.erledigt ? "am PC erledigt" : "wartet auf PC"}</span></div>`; }).join("") : `<p class="leer">Noch keine Entscheidungen.</p>`;
     return;
   }
-  if (ansicht === "fertig") {   // 24.11.: fertige Clips auch bei ausgeschaltetem PC
-    const { data: k, error } = await sb.from("karten").select("*").eq("status", "fertig").not("vorschau", "is", null).order("zeit", { ascending: false });
+  if (ansicht === "fertig") {   // 24.11.: neu gerenderte Originale (Bucket fertig, karten.datei), auch bei ausgeschaltetem PC
+    const { data: k, error } = await sb.from("karten").select("*").not("datei", "is", null).order("zeit", { ascending: false });
     if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
     if (!k.length) return ziel.innerHTML = `<p class="leer">Noch keine fertigen Clips in der Cloud. Der PC lädt sie nach und nach hoch.</p>`;
-    ziel.innerHTML = `<p style="color:var(--leise);font-size:14px">${k.length} fertige Clips, auch ohne PC. Video lädt erst beim Antippen.</p>` + k.map(c => `<div class="karte">
-      <video controls playsinline preload="none" data-pfad="${esc(c.vorschau)}"></video>
+    ziel.innerHTML = `<p style="color:var(--leise);font-size:14px">${k.length} neu gerenderte Clips, auch ohne PC. Video lädt erst beim Antippen.</p>` + k.map(c => `<div class="karte">
+      <video controls playsinline preload="none" data-pfad="${esc(c.datei)}"></video>
       <div class="kopf"><span>${esc(c.kanal)}</span><span>${(c.hinweise || []).map(esc).join(" ")}</span></div>
       <div class="titel">${esc(c.titel)}</div>
       <div class="caption">${esc(c.caption)}</div>
-      <div class="knoepfe" style="grid-template-columns:1fr 1fr"><a class="laden" data-pfad="${esc(c.vorschau)}" href="#"><button class="ja" style="width:100%">Herunterladen</button></a>
+      <div class="knoepfe" style="grid-template-columns:1fr 1fr"><a class="laden" data-pfad="${esc(c.datei)}" href="#"><button class="ja" style="width:100%">Herunterladen</button></a>
       <button class="kopieren">Text kopieren</button></div></div>`).join("");
-    const pfade = k.map(c => c.vorschau);
+    const pfade = k.map(c => c.datei);
     const [{ data: ansehen }, { data: laden }] = await Promise.all([
-      sb.storage.from("vorschau").createSignedUrls(pfade, 3600),
-      sb.storage.from("vorschau").createSignedUrls(pfade, 3600, { download: true })]);
+      sb.storage.from("fertig").createSignedUrls(pfade, 3600),
+      sb.storage.from("fertig").createSignedUrls(pfade, 3600, { download: true })]);
     const a = Object.fromEntries((ansehen || []).map(l => [l.path, l.signedUrl])), d = Object.fromEntries((laden || []).map(l => [l.path, l.signedUrl]));
     ziel.querySelectorAll("video[data-pfad]").forEach(v => { if (a[v.dataset.pfad]) v.src = a[v.dataset.pfad]; });
     ziel.querySelectorAll("a.laden").forEach(x => { if (d[x.dataset.pfad]) x.href = d[x.dataset.pfad]; });
