@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<title>Clips Prüfen</title>
+<title>Clipwreck</title>
 <link rel="icon" href="icons/favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/clipwreck-192.png">
 <link rel="apple-touch-icon" href="icons/clipwreck-180.png">
@@ -79,7 +79,7 @@
 </head>
 <body>
 <header>
-  <h1>Clips Prüfen <span id="pcstand"></span></h1>
+  <h1>Clipwreck <span id="pcstand"></span></h1>
   <nav id="nav" hidden>
     <button data-ansicht="pruefen" class="an">Prüfen</button>
     <button data-ansicht="clips">Clips</button>
@@ -379,8 +379,10 @@ async function entscheide(aktion) {
     queue.shift();
     naechste();
     toast({ behalten: "Behalten", ablehnen: "Verworfen", ueberarbeiten: "Zum Überarbeiten", posten: "Zum Posten" }[aktion], data?.id ? async () => {
-      const { error: e } = await sb.from("auftraege").delete().eq("id", data.id).is("erledigt", null);
+      // .select() zeigt, ob wirklich eine Zeile gelöscht wurde. Hat der PC den Auftrag schon erledigt, gibt es nichts mehr zurückzunehmen.
+      const { data: weg, error: e } = await sb.from("auftraege").delete().eq("id", data.id).is("erledigt", null).select("id");
       if (e) return toast("Rückgängig nicht möglich: " + e.message);
+      if (!weg?.length) return toast("Zu spät: Der PC hat das schon erledigt.");
       queue.unshift(k); naechste();
     } : null);
   } finally { entscheide.laeuft = false; }
