@@ -22,14 +22,16 @@ def tag_seit(iso, jetzt):
     return max(1, (jetzt - t).days + 1)
 
 
-def metriken_aktualisieren(metriken, posts, geplant, jetzt):
+def metriken_aktualisieren(metriken, posts, geplant, jetzt, plattform_von_kanal=None):
     nach_id = {g["buffer_id"]: g for g in geplant if g.get("buffer_id")}
+    plattform_von_kanal = plattform_von_kanal or {}
     for p in posts:
         g = nach_id.get(p["id"])
         if g and g["status"] != "gesendet":
             g["status"] = "gesendet"
         eintrag = metriken.setdefault(p["id"], {"meta": {}, "verlauf": {}})
-        eintrag["meta"] = {**eintrag["meta"], **({k: g.get(k) for k in ("titel", "art", "kanal", "dauer", "titel_typ", "slot", "karte_id")} if g else {"titel": (p.get("text") or "")[:80], "manuell": True}),
+        eintrag["meta"] = {**eintrag["meta"], **({k: g.get(k) for k in ("titel", "art", "kanal", "dauer", "titel_typ", "slot", "karte_id", "plattform")} if g else {"titel": (p.get("text") or "")[:80], "manuell": True}),
+                           "plattform": (g or {}).get("plattform") or plattform_von_kanal.get(p.get("channelId")) or eintrag["meta"].get("plattform") or "tiktok",
                            "gesendet": p.get("dueAt")}
         if not p.get("dueAt") or not p.get("metrics"):
             continue
@@ -72,19 +74,28 @@ def laengen_bucket(dauer):
 
 
 def gruppieren(metriken):
+    """Views werden je Plattform normiert (score = Views / Median der Plattform), damit YouTube, TikTok und
+    Instagram fair vergleichbar sind. Gewichte im Regelwerk beruhen auf dem Score."""
     zeilen = []
     for pid, e in metriken.items():
         k = kennzahlen(e)
         if k:
             m = e.get("meta", {})
-            zeilen.append({"id": pid, **m, **k, "laenge": laengen_bucket(m.get("dauer"))})
+            zeilen.append({"id": pid, **m, **k, "plattform": m.get("plattform") or "tiktok", "laenge": laengen_bucket(m.get("dauer"))})
+    medianen = {}
+    for z in zeilen:
+        medianen.setdefault(z["plattform"], []).append(z["views_d3"])
+    medianen = {p: statistics.median(v) or 1 for p, v in medianen.items()}
+    for z in zeilen:
+        z["score"] = z["views_d3"] / medianen[z["plattform"]]
     gruppen = {}
-    for dim in ("art", "slot", "titel_typ", "laenge", "kanal"):
+    for dim in ("plattform", "art", "slot", "titel_typ", "laenge", "kanal"):
         werte = {}
         for z in zeilen:
             if z.get(dim):
                 werte.setdefault(z[dim], []).append(z)
         gruppen[dim] = {w: {"n": len(l), "median_views": statistics.median(x["views_d3"] for x in l),
+                            "median_score": statistics.median(x["score"] for x in l),
                             "median_haltezeit": _median([x["haltezeit"] for x in l]),
                             "median_engagement": _median([x["engagement"] for x in l])}
                         for w, l in werte.items()}
@@ -105,21 +116,21 @@ def regelwerk_anpassen(gruppen, alt, gesamt_median, heute):
         for wert, g in gruppen.get(dim, {}).items():
             if g["n"] < A["mindest_anzahl_pro_gruppe"] or not gesamt_median:
                 continue
-            ziel = g["median_views"] / gesamt_median
+            ziel = g["median_score"]  # 1.0 = Plattform-Durchschnitt
             vorher = neu[schluessel].get(wert, 1.0)
             schritt = max(-A["max_aenderung_pro_lauf"], min(A["max_aenderung_pro_lauf"], ziel - vorher))
             jetzt = round(min(3.0, max(0.3, vorher + schritt)), 2)
             if abs(jetzt - vorher) >= 0.05:
                 neu[schluessel][wert] = jetzt
                 aenderungen.append({"datum": heute, "was": f"{schluessel}.{wert}", "von": vorher, "auf": jetzt,
-                                    "grund": f"Median {g['median_views']:.0f} Views bei n={g['n']} vs. gesamt {gesamt_median:.0f}"})
+                                    "grund": f"Score {g['median_score']:.2f} (1,0 = Plattform-Median), {g['median_views']:.0f} Views, n={g['n']}"})
     laengen = {w: g for w, g in gruppen.get("laenge", {}).items() if g["n"] >= A["mindest_anzahl_pro_gruppe"] and w != "ausserhalb"}
     if len(laengen) >= 2:
         # Haltezeit zählt mit, wenn vorhanden: Views * (1 + Haltezeit-Anteil) wäre spekulativ, daher nur Views.
-        beste = max(laengen, key=lambda w: laengen[w]["median_views"])
+        beste = max(laengen, key=lambda w: laengen[w]["median_score"])
         if beste != neu["laenge_ziel"]:
             aenderungen.append({"datum": heute, "was": "laenge_ziel", "von": neu["laenge_ziel"], "auf": beste,
-                                "grund": f"Bester Längenbereich nach Median-Views ({laengen[beste]['median_views']:.0f}, n={laengen[beste]['n']})"})
+                                "grund": f"Bester Längenbereich nach Score ({laengen[beste]['median_score']:.2f}, n={laengen[beste]['n']})"})
             neu["laenge_ziel"] = beste
     neu["grenzen"] = A["regelwerk_grenzen"]
     return neu, aenderungen
@@ -127,12 +138,13 @@ def regelwerk_anpassen(gruppen, alt, gesamt_median, heute):
 
 def vorschlaege(gruppen, gesamt_median):
     tipps = []
-    for dim, name in (("art", "Format"), ("slot", "Uhrzeit"), ("titel_typ", "Titeltyp"), ("laenge", "Länge"), ("kanal", "Creator")):
+    for dim, name in (("plattform", "Plattform"), ("art", "Format"), ("slot", "Uhrzeit"), ("titel_typ", "Titeltyp"), ("laenge", "Länge"), ("kanal", "Creator")):
         g = {w: x for w, x in gruppen.get(dim, {}).items() if x["n"] >= 2}
         if len(g) < 2 or not gesamt_median:
             continue
-        top = max(g, key=lambda w: g[w]["median_views"])
-        flop = min(g, key=lambda w: g[w]["median_views"])
+        sk = "median_views" if dim == "plattform" else "median_score"
+        top = max(g, key=lambda w: g[w][sk])
+        flop = min(g, key=lambda w: g[w][sk])
         sicher = "sicher" if min(g[top]["n"], g[flop]["n"]) >= A["mindest_anzahl_pro_gruppe"] else "noch wenig Daten"
         tipps.append(f"{name}: '{top}' läuft am besten ({g[top]['median_views']:.0f} Views, n={g[top]['n']}), "
                      f"'{flop}' am schwächsten ({g[flop]['median_views']:.0f}, n={g[flop]['n']}). {sicher}.")
@@ -145,12 +157,12 @@ def auswerten(metriken, alt_auswertung, jetzt):
     heute = jetzt.date().isoformat()
     regel, aend = regelwerk_anpassen(gruppen, (alt_auswertung or {}).get("regelwerk_auto", {}), gesamt, heute)
     historie = ((alt_auswertung or {}).get("aenderungen", []) + aend)[-200:]
-    top = sorted(zeilen, key=lambda z: z["views_d3"], reverse=True)
+    top = sorted(zeilen, key=lambda z: z["score"], reverse=True)
     return {"stand": jetzt.isoformat(), "anzahl_posts": len(zeilen), "median_views_d3": gesamt,
             "gruppen": gruppen, "vorschlaege": vorschlaege(gruppen, gesamt), "regelwerk_auto": regel,
             "aenderungen": historie, "neu_heute": aend,
-            "top": [{k: z.get(k) for k in ("titel", "art", "slot", "views_d3", "haltezeit", "alter_tage")} for z in top[:5]],
-            "flop": [{k: z.get(k) for k in ("titel", "art", "slot", "views_d3", "haltezeit", "alter_tage")} for z in top[-3:]]}
+            "top": [{k: z.get(k) for k in ("titel", "plattform", "art", "slot", "views_d3", "haltezeit", "alter_tage")} for z in top[:5]],
+            "flop": [{k: z.get(k) for k in ("titel", "plattform", "art", "slot", "views_d3", "haltezeit", "alter_tage")} for z in top[-3:]]}
 
 
 def main():
@@ -160,9 +172,12 @@ def main():
     metriken = sb.info_lesen("metriken", {}) or {}
     try:
         buf = Buffer()
-        org, kanal = buf.kanal(CONFIG["buffer_kanal_name"])
-        posts = buf.gesendete_posts(org, kanal["id"])
-        metriken = metriken_aktualisieren(metriken, posts, posting.get("geplant", []), jetzt)
+        org, kanaele = buf.kanaele(CONFIG["buffer_kanal_name"])
+        von_kanal = {k["id"]: p for p, k in kanaele.items()}
+        posts = buf.gesendete_posts(org, list(von_kanal))
+        metriken = metriken_aktualisieren(metriken, posts, posting.get("geplant", []), jetzt, von_kanal)
+        typen = sorted({m["type"] for p in posts for m in (p.get("metrics") or [])})
+        print(f"Kanäle: {', '.join(kanaele)}. Metrik-Typen: {', '.join(typen) or 'keine'}")
         print(f"{len(posts)} gesendete Posts von Buffer gelesen.")
     except SystemExit as e:
         print(f"Buffer übersprungen: {e}")

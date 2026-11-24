@@ -32,13 +32,14 @@ def auswertung_md(a, posting):
          f"{sum(1 for g in posting.get('geplant', []) if g['status'] == 'geplant')}", "", "## Vorschläge"]
     z += [f"- {t}" for t in a.get("vorschlaege", [])] or ["- Noch zu wenig Daten."]
     z += ["", "## Top 5"] + [f"- {t['titel']} ({t.get('art')}, {t.get('slot')}): {zahl(t['views_d3'])} Views" for t in a.get("top", [])]
+    z += ["", "Score: Views geteilt durch den Median der jeweiligen Plattform (1,0 = normal), damit TikTok, YouTube und Instagram vergleichbar sind."]
     z += ["", "## Gruppen (Median Views Tag 3)"]
     for dim, g in a.get("gruppen", {}).items():
         z.append(f"### {dim}")
-        z += ["| Wert | n | Views | Haltezeit | Engagement |", "|---|---|---|---|---|"]
+        z += ["| Wert | n | Score | Views | Haltezeit | Engagement |", "|---|---|---|---|---|---|"]
         for w, x in sorted(g.items(), key=lambda i: -i[1]["median_views"]):
             eng = x.get("median_engagement")
-            z.append(f"| {w} | {x['n']} | {zahl(x['median_views'])} | {zahl(x.get('median_haltezeit'), 1)} | "
+            z.append(f"| {w} | {x['n']} | {zahl(x.get('median_score'), 2)} | {zahl(x['median_views'])} | {zahl(x.get('median_haltezeit'), 1)} | "
                      f"{zahl(eng * 100, 1) + ' %' if eng is not None else '–'} |")
     z += ["", "## Regelwerk automatisch", "```json", json.dumps(a.get("regelwerk_auto", {}), ensure_ascii=False, indent=2), "```",
           "", "Grenzen: Gewichte 0,3 bis 3,0, max. ±0,2 pro Tag, erst ab 4 Posts pro Gruppe. Länge bleibt im Regelwerk-Rahmen 10-35 s.",
@@ -47,14 +48,14 @@ def auswertung_md(a, posting):
 
 
 def tag_md(metriken, heute):
-    z = [f"# TikTok-Zahlen {heute}", "", "| Titel | Format | Slot | Tag | Views | Likes | Shares | Follows | Haltezeit |", "|---|---|---|---|---|---|---|---|---|"]
+    z = [f"# TikTok-Zahlen {heute}", "", "| Plattform | Titel | Format | Slot | Tag | Views | Likes | Shares | Follows | Haltezeit |", "|---|---|---|---|---|---|---|---|---|---|"]
     for e in metriken.values():
         v = e.get("verlauf", {})
         if not v:
             continue
         t = max(v, key=int)
         x, m, c = v[t], e.get("meta", {}), e.get("csv", {})
-        z.append(f"| {m.get('titel', '')[:50]} | {m.get('art') or ''} | {m.get('slot') or ''} | {t} | {zahl(x.get('views'))} | "
+        z.append(f"| {m.get('plattform') or 'tiktok'} | {m.get('titel', '')[:50]} | {m.get('art') or ''} | {m.get('slot') or ''} | {t} | {zahl(x.get('views'))} | "
                  f"{zahl(x.get('likes'))} | {zahl(x.get('shares'))} | {zahl(x.get('follows'))} | {zahl(c.get('avg_watch_s'), 1)} |")
     return "\n".join(z) + "\n"
 

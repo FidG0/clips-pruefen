@@ -150,7 +150,7 @@ async function zeige() {
       sb.from("info").select("wert").eq("schluessel", "auswertung").maybeSingle()]);
     const po = p?.wert || {}, au = a?.wert || {};
     const farbe = { geplant: "var(--gelb)", gesendet: "var(--gruen)", fehler: "var(--rot)", probelauf: "var(--leise)" };
-    const zeile = g => `<div class="zeile"><span><b style="color:${farbe[g.status] || "var(--leise)"}">${esc(g.status)}</b> ${esc(g.titel)}${g.fehler ? "<br><small style='color:var(--rot)'>" + esc(g.fehler) + "</small>" : ""}</span><span>${esc(g.slot_lokal)}</span></div>`;
+    const zeile = g => `<div class="zeile"><span><b style="color:${farbe[g.status] || "var(--leise)"}">${esc(g.status)}</b> ${esc({ tiktok: "TikTok", youtube: "YouTube", instagram: "Insta" }[g.plattform || "tiktok"] || g.plattform)} · ${esc(g.titel)}${g.fehler ? "<br><small style='color:var(--rot)'>" + esc(g.fehler) + "</small>" : ""}</span><span>${esc(g.slot_lokal)}</span></div>`;
     const kommend = (po.geplant || []).filter(g => g.status !== "gesendet").slice(-20).reverse();
     const gesendet = (po.geplant || []).filter(g => g.status === "gesendet").slice(-10).reverse();
     ziel.innerHTML = `<div class="karte"><b>Modus:</b> ${po.modus === "live" ? "<span style='color:var(--gruen)'>live (Buffer)</span>" : "Probelauf, es wird nichts gepostet"}
@@ -160,7 +160,7 @@ async function zeige() {
       + (gesendet.length ? `<h3>Gesendet</h3>` + gesendet.map(zeile).join("") : "")
       + `<h3>Zahlen</h3>` + (au.anzahl_posts ? `<div class="karte">${au.anzahl_posts} Posts · Median ${Math.round(au.median_views_d3 || 0).toLocaleString("de-DE")} Views (Tag 3)
           ${(au.vorschlaege || []).map(t => `<div class="hinweis">• ${esc(t)}</div>`).join("")}</div>`
-          + (au.top || []).map(t => `<div class="zeile"><span>${esc(t.titel)}<br><small>${esc(t.art || "")} · ${esc(t.slot || "")}</small></span><span>${Math.round(t.views_d3).toLocaleString("de-DE")}</span></div>`).join("")
+          + (au.top || []).map(t => `<div class="zeile"><span>${esc(t.titel)}<br><small>${esc(t.plattform || "")} · ${esc(t.art || "")} · ${esc(t.slot || "")}</small></span><span>${Math.round(t.views_d3).toLocaleString("de-DE")}</span></div>`).join("")
         : `<p class="leer" style="padding:12px 0">Noch keine Zahlen.</p>`);
     return;
   }

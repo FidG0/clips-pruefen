@@ -1,8 +1,8 @@
-# Clipwreck: Posting und Analyse automatisch
+# Clipwreck: Posting und Analyse automatisch (TikTok, YouTube Shorts, Instagram Reels)
 
 Ablauf:
 1. Handyseite: Knopf **Posten (nächster Slot)** auf einer Karte. Gespeichert als Auftrag `behalten` mit Kommentar `[posten] …`, der PC verarbeitet ihn also wie bisher als Behalten.
-2. GitHub Actions `posten.yml` (alle 15 Min, läuft ohne PC): plant den Clip über die Buffer-API in den nächsten freien Slot 16:00 / 19:00 / 20:30 Uhr (Berlin), max. 3 pro Tag, mit Caption + Hashtags (`config.json`). Video geht als signierter Supabase-Link (14 Tage gültig) an Buffer.
+2. GitHub Actions `posten.yml` (alle 15 Min, läuft ohne PC): plant den Clip über die Buffer-API auf allen aktiven Plattformen (`plattformen` in `config.json`) in den nächsten freien Slot 16:00 / 19:00 / 20:30 Uhr (Berlin), max. 3 pro Tag, mit Caption + Hashtags (`config.json`). Video geht als signierter Supabase-Link (14 Tage gültig) an Buffer.
 3. GitHub Actions `zahlen.yml` (täglich 06:15): holt Zahlen von Buffer, verfolgt jeden Post 10 Tage, wertet nach Format, Länge, Titeltyp, Uhrzeit, Creator aus und passt `regelwerk_auto` an (Gewichte 0,3-3,0, max. ±0,2 pro Tag, erst ab 4 Posts pro Gruppe).
 4. PC: `vault_sync.py` schreibt alles in `Business-Vault/TikTok-Analyse/` (Auswertung, Tageswerte, Entscheidungen mit Datum + Grund) und `Clips-Pipeline/analyse/regelwerk_auto.json`.
 5. Fallback: `csv_import.py` liest TikTok-Studio-Exporte aus `Clips-Pipeline/analyse/csv_eingang/` (Haltezeit, ganz angesehen, neue Follower).
@@ -22,3 +22,9 @@ Status jederzeit im Reiter **Posting** der Handyseite.
 
 ## Tests
 `cd automation && python -m unittest -v test_automation.py`
+
+## Plattformen (Stand 24.11.2026)
+- TikTok `clipwreckofc`: normales Konto, kein Business nötig. Text ohne Zeilenumbrüche, max. 6 Hashtags.
+- YouTube `Clipwreck`: Short, Titel = Clip-Titel + `#shorts` (max. 100 Zeichen), Kategorie 20 Gaming bei GTA, sonst 24 Unterhaltung, öffentlich, nicht für Kinder.
+- Instagram `clipwreckofc`: Creator-Konto (ohne Facebook), Reel mit Feed-Anzeige, max. 5 Hashtags.
+- Auswertung vergleicht über einen Score (Views / Median der Plattform), damit große TikTok-Zahlen YouTube nicht überdecken.
