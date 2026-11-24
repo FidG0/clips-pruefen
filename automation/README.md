@@ -28,3 +28,10 @@ Status jederzeit im Reiter **Posting** der Handyseite.
 - YouTube `Clipwreck`: Short, Titel = Clip-Titel + `#shorts` (max. 100 Zeichen), Kategorie 20 Gaming bei GTA, sonst 24 Unterhaltung, öffentlich, nicht für Kinder.
 - Instagram `clipwreckofc`: Creator-Konto (ohne Facebook), Reel mit Feed-Anzeige, max. 5 Hashtags.
 - Auswertung vergleicht über einen Score (Views / Median der Plattform), damit große TikTok-Zahlen YouTube nicht überdecken.
+
+## Sperren vor dem Posten (lib.sperrgrund)
+Eine "Posten"-Freigabe wird nur geplant, wenn alles drei stimmt, sonst steht sie unter info.posting.gesperrt und wird alle 15 Min neu geprüft:
+1. Kein Glücksspiel (Wortliste `sperren.gluecksspiel_woerter` in config.json oder `checks.gluecksspiel = true`).
+2. Neu gerendertes Original vorhanden (`karten.datei` im Fach `fertig`). Alte Charge ohne Original bleibt gesperrt.
+3. Ton-Sync-Ampel grün (`karten.checks.ton_sync.status == "gruen"`). Gelb, rot oder ungeprüft bleibt gesperrt.
+Die Handyseite zeigt den Grund direkt am Posten-Knopf. Slots 16:00/19:00/20:30, also höchstens 3 Posts pro Tag und Plattform.

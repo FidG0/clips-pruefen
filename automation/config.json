@@ -106,5 +106,36 @@
       ]
     }
   },
-  "storage_bucket_fertig": "fertig"
+  "storage_bucket_fertig": "fertig",
+  "sperren": {
+    "ton_sync_pflicht": "gruen",
+    "original_pflicht": true,
+    "gluecksspiel_woerter": [
+      "casino",
+      "glücksspiel",
+      "gluecksspiel",
+      "gambling",
+      "gamble",
+      "gamblen",
+      "roulette",
+      "blackjack",
+      "poker",
+      "slots",
+      "slot machine",
+      "slotmaschine",
+      "spielautomat",
+      "sportwette",
+      "sportwetten",
+      "wette",
+      "wetten",
+      "stake",
+      "jackpot",
+      "freispiel",
+      "freispiele",
+      "bonus buy",
+      "lootbox",
+      "case opening",
+      "crash game"
+    ]
+  }
 }
