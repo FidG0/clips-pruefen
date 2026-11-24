@@ -225,3 +225,24 @@ def titel_typ(titel):
     if re.match(r"^(top|platz)\s*\d", t, re.I):
         return "liste"
     return "aussage"
+
+
+# ---------------------------------------------------------------- Sperren vor dem Posten
+def sperrgrund(karte, cfg=CONFIG):
+    """None = darf gepostet werden. Sonst der Grund, warum nicht (wird jeden Lauf neu geprüft).
+    1) Glücksspiel nie. 2) Nur neu gerenderte Originale (Feld datei im Fach 'fertig'), nicht die alte Charge.
+    3) Ton-Sync-Ampel muss grün sein (rot, gelb oder ungeprüft = gesperrt)."""
+    s = cfg.get("sperren", {})
+    c = karte.get("checks") or {}
+    text = " ".join(str(karte.get(k) or "") for k in ("titel", "caption", "art", "format", "kanal", "quelle", "spiel"))
+    text += " " + " ".join(str(h) for h in (karte.get("hinweise") or []))
+    text = text.lower()
+    if c.get("gluecksspiel") or any(re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", text) for w in s.get("gluecksspiel_woerter", [])):
+        return "Glücksspiel-Szene, wird nie gepostet."
+    if s.get("original_pflicht", True) and not karte.get("datei"):
+        return "Alte Charge: kein neu gerendertes Original im Fach 'fertig'."
+    pflicht = s.get("ton_sync_pflicht", "gruen")
+    status = (c.get("ton_sync") or {}).get("status")
+    if pflicht and status != pflicht:
+        return f"Ton-Sync-Ampel {status or 'ungeprüft'}, gepostet wird nur bei grün."
+    return None

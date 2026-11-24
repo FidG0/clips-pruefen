@@ -1,6 +1,6 @@
 name: Posten (Freigaben -> Buffer)
 # Alle 15 Minuten: neue "Posten"-Freigaben von der Handyseite in den nächsten Slot (16:00/19:00/20:30) planen.
-# Ohne Secret BUFFER_LIVE=ja nur Probelauf, es wird nichts gepostet.
+# Ohne Secret BUFFER_LIVE=ja nur Probelauf. Gesperrt bleibt: Ton-Ampel nicht grün, alte Charge ohne Original, Glücksspiel.
 on:
   schedule:
     - cron: "*/15 * * * *"

@@ -11,9 +11,9 @@ import urllib.parse
 from zoneinfo import ZoneInfo
 
 from lib import (CONFIG, Buffer, Supabase, caption_bauen, format_von, live, metadata_bauen,
-                 naechster_slot, titel_typ)
+                 naechster_slot, sperrgrund, titel_typ)
 
-STANDARD = {"erledigte_auftraege": [], "geplant": [], "probelauf": [], "letzter_lauf": None}
+STANDARD = {"erledigte_auftraege": [], "geplant": [], "probelauf": [], "gesperrt": [], "letzter_lauf": None}
 
 
 def aktive_plattformen(cfg=CONFIG):
@@ -70,11 +70,16 @@ def main():
         _, kanaele = buf.kanaele(CONFIG["buffer_kanal_name"])
 
     belegt = {p: belegte_slots(zustand["geplant"], p) for p in plattformen}
-    probe = []
+    probe, gesperrt = [], []
     for a in offen:
         k = {**(a.get("karten") or {})}
         if a.get("titel"):
             k["titel"] = a["titel"]
+        grund = sperrgrund(k)
+        if grund:  # bleibt offen und wird jeden Lauf neu geprüft (z. B. sobald die Ton-Ampel grün ist)
+            gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"), "grund": grund})
+            print(f"gesperrt  {k.get('titel')}: {grund}")
+            continue
         bucket, pfad = videodatei(k)
         link = None
         for p in plattformen:
@@ -106,13 +111,14 @@ def main():
             zustand["erledigte_auftraege"].append(a["id"])
 
     zustand["probelauf"] = probe
+    zustand["gesperrt"] = gesperrt
     zustand["plattformen"] = plattformen
     zustand["modus"] = "live" if ist_live else "probelauf"
     zustand["letzter_lauf"] = dt.datetime.now(dt.timezone.utc).isoformat()
     zustand["geplant"] = zustand["geplant"][-600:]
     zustand["erledigte_auftraege"] = zustand["erledigte_auftraege"][-1000:]
     sb.info_schreiben("posting", zustand)
-    print(f"{len(offen)} neue Freigaben, Plattformen {', '.join(plattformen)}, Modus {zustand['modus']}.")
+    print(f"{len(offen)} neue Freigaben ({len(gesperrt)} gesperrt), Plattformen {', '.join(plattformen)}, Modus {zustand['modus']}.")
 
 
 if __name__ == "__main__":

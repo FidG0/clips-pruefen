@@ -56,6 +56,7 @@
   .suche { margin-bottom:8px; }
   .ampel { display:flex; gap:10px; flex-wrap:wrap; margin:8px 0 2px; font-size:12px; color:var(--leise); }
   .ampel span { display:inline-flex; align-items:center; gap:5px; }
+  button.posten:disabled { opacity:.55; cursor:not-allowed; }
   .ampel i { width:11px; height:11px; border-radius:50%; background:#4b4560; display:inline-block; }
   .ampel .gruen i { background:var(--gruen); } .ampel .gelb i { background:var(--gelb); } .ampel .rot i { background:var(--rot); }
   .stapel { position:relative; touch-action:pan-y; transition:transform .18s ease, box-shadow .18s; will-change:transform; }
@@ -165,6 +166,7 @@ async function zeige() {
     ziel.innerHTML = `<div class="karte"><b>Modus:</b> ${po.modus === "live" ? "<span style='color:var(--gruen)'>live (Buffer)</span>" : "Probelauf, es wird nichts gepostet"}
         ${po.letzter_lauf ? "<br><small style='color:var(--leise)'>Letzter Lauf: " + new Date(po.letzter_lauf).toLocaleString("de-DE") + "</small>" : ""}</div>`
       + ((po.probelauf || []).length ? `<h3>Würde geplant (Probelauf)</h3>` + po.probelauf.map(zeile).join("") : "")
+      + ((po.gesperrt || []).length ? `<h3>Gesperrt (wird alle 15 Min neu geprüft)</h3>` + po.gesperrt.map(g => `<div class="zeile"><span>${esc(g.titel)}<br><small style="color:var(--rot)">${esc(g.grund)}</small></span><span></span></div>`).join("") : "")
       + `<h3>Geplant</h3>` + (kommend.length ? kommend.map(zeile).join("") : `<p class="leer" style="padding:12px 0">Nichts geplant.</p>`)
       + (gesendet.length ? `<h3>Gesendet</h3>` + gesendet.map(zeile).join("") : "")
       + `<h3>Zahlen</h3>` + (au.anzahl_posts ? `<div class="karte">${au.anzahl_posts} Posts · Median ${Math.round(au.median_views_d3 || 0).toLocaleString("de-DE")} Views (Tag 3)
@@ -238,6 +240,16 @@ function ampel(k, gemessen) {
     ["Länge", laenge, dauer != null ? `${Math.round(dauer * 10) / 10} s (Ziel 10 bis 35 s)` : "Länge unbekannt"],
     ["Text", c.untertitel?.status, c.untertitel?.hinweis || "Untertitel noch nicht geprüft"]];
   return `<div class="ampel">${teile.map(([n, s, t]) => `<span class="${esc(s || "")}" title="${esc(t)}"><i></i>${n}</span>`).join("")}</div>`;
+}
+// Spiegelt automation/lib.py sperrgrund(): nur grüne Ton-Ampel, nur neu gerenderte Originale, nie Glücksspiel.
+const GLUECKSSPIEL = ["casino", "glücksspiel", "gluecksspiel", "gambling", "gamble", "gamblen", "roulette", "blackjack", "poker", "slots", "slot machine", "slotmaschine", "spielautomat", "sportwette", "sportwetten", "wette", "wetten", "stake", "jackpot", "freispiel", "freispiele", "bonus buy", "lootbox", "case opening", "crash game"];
+function sperrgrund(k) {
+  const c = k.checks || {};
+  const t = [k.titel, k.caption, k.art, k.format, k.kanal, k.quelle, k.spiel, ...(k.hinweise || [])].join(" ").toLowerCase();
+  if (c.gluecksspiel || GLUECKSSPIEL.some(w => new RegExp(`(?<![\\p{L}\\p{N}_])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "u").test(t))) return "Glücksspiel, wird nie gepostet";
+  if (!k.datei) return "Alte Charge, erst neu rendern";
+  if (c.ton_sync?.status !== "gruen") return `Ton-Ampel ${c.ton_sync?.status || "ungeprüft"}, Posten erst bei grün`;
+  return null;
 }
 function toast(text, undo) {
   let t = $("#toast"); if (t) t.remove();
@@ -331,7 +343,7 @@ async function naechste(ziel, gesamt) {
         <button data-a="ueberarbeiten">Überarbeiten</button>
         <button class="ja" data-a="behalten">Behalten</button>
       </div>
-      <div class="knoepfe"><button class="posten" data-a="posten" style="grid-column:1/-1">Posten (nächster Slot)</button></div>
+      <div class="knoepfe"><button class="posten" data-a="posten" style="grid-column:1/-1" ${sperrgrund(k) ? "disabled" : ""}>${sperrgrund(k) ? "Posten gesperrt: " + esc(sperrgrund(k)) : "Posten (nächster Slot)"}</button></div>
       <div class="tipp">Karte wischen: rechts behalten, links verwerfen, hoch überarbeiten.</div>
       <div class="tipp tastenhilfe">Tasten: J behalten · K verwerfen · R überarbeiten · P posten · Leertaste Play · N Notiz</div>
     </div>`;
@@ -352,6 +364,7 @@ async function naechste(ziel, gesamt) {
 }
 async function entscheide(aktion) {
   const k = queue[0]; if (!k || entscheide.laeuft) return;
+  if (aktion === "posten" && sperrgrund(k)) return toast("Posten gesperrt: " + sperrgrund(k));
   const notiz = $("#notiz").value.trim(), titel = $("#neuerTitel").value.trim();
   if (aktion === "ueberarbeiten" && !notiz) { $("#notiz").focus(); return toast("Bei Überarbeiten bitte kurz sagen, was geändert werden soll."); }
   entscheide.laeuft = true;

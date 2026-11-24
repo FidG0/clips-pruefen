@@ -132,10 +132,6 @@ class Csv(unittest.TestCase):
             self.assertEqual(csv_import.zuordnen(z, m), "p1")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PostenProbelauf(unittest.TestCase):
     def test_drei_plattformen_ohne_buffer(self):
         import os
@@ -152,7 +148,11 @@ class PostenProbelauf(unittest.TestCase):
 
             def holen(self, t, q):
                 return [{"id": 7, "karte_id": "k1", "kommentar": "[posten]", "titel": None,
-                         "karten": {"titel": "Zarbex fährt rein", "caption": "lol", "format": "GTA", "kanal": "Zarbex", "vorschau": "a.mp4"}}]
+                         "karten": {"titel": "Zarbex fährt rein", "caption": "lol", "format": "GTA", "kanal": "Zarbex", "vorschau": "a.mp4",
+                                     "datei": "a.mp4", "checks": {"ton_sync": {"status": "gruen", "ms": 12}}}},
+                        {"id": 8, "karte_id": "k2", "kommentar": "[posten]", "titel": None,
+                         "karten": {"titel": "Monte Casino Run", "caption": "x", "kanal": "Monte", "datei": "b.mp4",
+                                    "checks": {"ton_sync": {"status": "gruen"}}}}]
 
         alt = posten.Supabase
         posten.Supabase = FakeSb
@@ -166,3 +166,28 @@ class PostenProbelauf(unittest.TestCase):
         self.assertEqual(sorted(e["plattform"] for e in z["probelauf"]), ["instagram", "tiktok", "youtube"])
         self.assertEqual(z["erledigte_auftraege"], [])
         self.assertTrue(all(e["status"] == "probelauf" for e in z["probelauf"]))
+        self.assertEqual([g["auftrag_id"] for g in z["gesperrt"]], [8])
+
+
+class Sperren(unittest.TestCase):
+    ok = {"titel": "NPC fährt gegen Laterne", "datei": "x.mp4", "checks": {"ton_sync": {"status": "gruen"}}}
+
+    def test_gruen_mit_original_frei(self):
+        self.assertIsNone(lib.sperrgrund(self.ok))
+
+    def test_ton_gelb_rot_ungeprueft(self):
+        for c in ({"ton_sync": {"status": "gelb"}}, {"ton_sync": {"status": "rot"}}, {}, None):
+            self.assertIn("Ton-Sync", lib.sperrgrund({**self.ok, "checks": c}))
+
+    def test_alte_charge(self):
+        self.assertIn("Alte Charge", lib.sperrgrund({**self.ok, "datei": None}))
+
+    def test_gluecksspiel(self):
+        for t in ("Papaplatte im Casino", "Slots um 3 Uhr", "Poker-Abend", "Monte Sportwetten"):
+            self.assertIn("Glücksspiel", lib.sperrgrund({**self.ok, "titel": t}))
+        self.assertIn("Glücksspiel", lib.sperrgrund({**self.ok, "checks": {"ton_sync": {"status": "gruen"}, "gluecksspiel": True}}))
+        self.assertIsNone(lib.sperrgrund({**self.ok, "titel": "Steakhouse Chaos"}))
+
+
+if __name__ == "__main__":
+    unittest.main()
