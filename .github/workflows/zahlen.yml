@@ -1,0 +1,25 @@
+name: Zahlen (täglich)
+# Täglich 06:15 Berlin (05:15 UTC im Winter): Buffer-Zahlen holen, 10 Tage nachverfolgen, auswerten, Regelwerk anpassen.
+on:
+  schedule:
+    - cron: "15 5 * * *"
+  workflow_dispatch:
+concurrency: posting
+permissions:
+  contents: read
+jobs:
+  zahlen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_SECRET: ${{ secrets.SUPABASE_SECRET }}
+      BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tests
+        working-directory: automation
+        run: python3 -m unittest test_automation.py
+      - name: Zahlen holen und auswerten
+        if: env.SUPABASE_SECRET != ''
+        working-directory: automation
+        run: python3 zahlen.py

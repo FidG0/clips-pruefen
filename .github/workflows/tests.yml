@@ -1,0 +1,14 @@
+name: Tests
+on:
+  push:
+    paths: ["automation/**"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - working-directory: automation
+        run: python3 -m unittest -v test_automation.py

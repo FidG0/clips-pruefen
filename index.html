@@ -8,12 +8,13 @@
 <style>
   :root { --bg:#14111c; --karte:#1f1a2b; --linie:#352d48; --text:#f2eefa; --leise:#a99fbd; --gruen:#4ade80; --rot:#f87171; --gelb:#fbbf24; }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
   header { position:sticky; top:0; z-index:5; background:var(--bg); padding:12px 16px 8px; border-bottom:1px solid var(--linie); }
   header h1 { margin:0; font-size:18px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
   #pcstand { font-size:12px; color:var(--leise); font-weight:400; }
   nav { display:flex; gap:6px; margin-top:8px; }
-  nav button { flex:1; }
+  nav button { flex:1; padding:8px 4px; font-size:14px; }
   main { padding:12px 16px 40px; max-width:560px; margin:0 auto; }
   button, input, textarea { font:inherit; color:inherit; }
   button { background:var(--karte); border:1px solid var(--linie); border-radius:10px; padding:10px 12px; cursor:pointer; }
@@ -28,7 +29,8 @@
   .titel { font-weight:650; margin:2px 0 6px; }
   .caption { white-space:pre-wrap; font-size:14px; color:var(--leise); max-height:7em; overflow:auto; }
   .hinweis { font-size:13px; color:var(--gelb); margin-top:6px; }
-  .knoepfe { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px; }
+  .knoepfe { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+  .knoepfe .posten { grid-column:1 / -1; }
   .mehr { margin-top:8px; display:grid; gap:8px; }
   .leer { color:var(--leise); text-align:center; padding:40px 0; }
   .zeile { display:flex; justify-content:space-between; gap:8px; padding:10px 0; border-bottom:1px solid var(--linie); font-size:14px; }
@@ -45,6 +47,7 @@
     <button data-ansicht="fertig">Fertig</button>
     <button data-ansicht="erledigt">Erledigt</button>
     <button data-ansicht="videos">Videos</button>
+    <button data-ansicht="posting">Posting</button>
     <button id="abmelden">Abmelden</button>
   </nav>
 </header>
@@ -99,6 +102,7 @@ async function pcStand() {
   }
 }
 const PC = "http://100.93.141.24:8800/";
+const MARKER = "[posten]";
 
 async function zeige() {
   pcStand();
@@ -134,12 +138,33 @@ async function zeige() {
       + l.map(v => `<div class="zeile"><span><b style="color:${v.ergebnis === "genommen" ? "var(--gruen)" : "var(--leise)"}">${esc(v.ergebnis)}</b> ${esc(v.titel)}<br><small>${esc(v.grund)}</small></span><span>${esc(v.kanal)}</span></div>`).join("");
     return;
   }
+  if (ansicht === "posting") {
+    const [{ data: p }, { data: a }] = await Promise.all([
+      sb.from("info").select("wert").eq("schluessel", "posting").maybeSingle(),
+      sb.from("info").select("wert").eq("schluessel", "auswertung").maybeSingle()]);
+    const po = p?.wert || {}, au = a?.wert || {};
+    const farbe = { geplant: "var(--gelb)", gesendet: "var(--gruen)", fehler: "var(--rot)", probelauf: "var(--leise)" };
+    const zeile = g => `<div class="zeile"><span><b style="color:${farbe[g.status] || "var(--leise)"}">${esc(g.status)}</b> ${esc(g.titel)}${g.fehler ? "<br><small style='color:var(--rot)'>" + esc(g.fehler) + "</small>" : ""}</span><span>${esc(g.slot_lokal)}</span></div>`;
+    const kommend = (po.geplant || []).filter(g => g.status !== "gesendet").slice(-20).reverse();
+    const gesendet = (po.geplant || []).filter(g => g.status === "gesendet").slice(-10).reverse();
+    ziel.innerHTML = `<div class="karte"><b>Modus:</b> ${po.modus === "live" ? "<span style='color:var(--gruen)'>live (Buffer)</span>" : "Probelauf, es wird nichts gepostet"}
+        ${po.letzter_lauf ? "<br><small style='color:var(--leise)'>Letzter Lauf: " + new Date(po.letzter_lauf).toLocaleString("de-DE") + "</small>" : ""}</div>`
+      + ((po.probelauf || []).length ? `<h3>Würde geplant (Probelauf)</h3>` + po.probelauf.map(zeile).join("") : "")
+      + `<h3>Geplant</h3>` + (kommend.length ? kommend.map(zeile).join("") : `<p class="leer" style="padding:12px 0">Nichts geplant.</p>`)
+      + (gesendet.length ? `<h3>Gesendet</h3>` + gesendet.map(zeile).join("") : "")
+      + `<h3>Zahlen</h3>` + (au.anzahl_posts ? `<div class="karte">${au.anzahl_posts} Posts · Median ${Math.round(au.median_views_d3 || 0).toLocaleString("de-DE")} Views (Tag 3)
+          ${(au.vorschlaege || []).map(t => `<div class="hinweis">• ${esc(t)}</div>`).join("")}</div>`
+          + (au.top || []).map(t => `<div class="zeile"><span>${esc(t.titel)}<br><small>${esc(t.art || "")} · ${esc(t.slot || "")}</small></span><span>${Math.round(t.views_d3).toLocaleString("de-DE")}</span></div>`).join("")
+        : `<p class="leer" style="padding:12px 0">Noch keine Zahlen.</p>`);
+    return;
+  }
   if (ansicht === "erledigt") {
     const { data, error } = await sb.from("auftraege").select("id,aktion,kommentar,erstellt,erledigt,ergebnis,karten(titel)").order("id", { ascending: false }).limit(40);
     if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
     const name = { behalten: "Behalten", ablehnen: "Nicht behalten", ueberarbeiten: "Überarbeiten" };
-    ziel.innerHTML = data.length ? data.map(a => `<div class="zeile"><span>${name[a.aktion]}: ${esc(a.karten?.titel)}${a.kommentar ? "<br><small>„" + esc(a.kommentar) + "“</small>" : ""}</span>
-      <span>${a.erledigt ? "am PC erledigt" : "wartet auf PC"}</span></div>`).join("") : `<p class="leer">Noch keine Entscheidungen.</p>`;
+    ziel.innerHTML = data.length ? data.map(a => { const p = (a.kommentar || "").startsWith(MARKER); const kom = p ? a.kommentar.slice(MARKER.length).trim() : a.kommentar;
+      return `<div class="zeile"><span>${p ? "Posten" : name[a.aktion]}: ${esc(a.karten?.titel)}${kom ? "<br><small>„" + esc(kom) + "“</small>" : ""}</span>
+      <span>${a.erledigt ? "am PC erledigt" : "wartet auf PC"}</span></div>`; }).join("") : `<p class="leer">Noch keine Entscheidungen.</p>`;
     return;
   }
   const [{ data: karten, error }, { data: wartend }] = await Promise.all([
@@ -156,7 +181,8 @@ async function zeige() {
     <div class="caption">${esc(k.caption)}</div>
     ${(k.hinweise || []).map(h => `<div class="hinweis">• ${esc(h)}</div>`).join("")}
     <div class="knoepfe">
-      <button class="ja" data-a="behalten">Behalten</button>
+      <button class="ja posten" data-a="posten">Posten (nächster Slot)</button>
+      <button data-a="behalten">Behalten</button>
       <button data-a="ueberarbeiten">Überarbeiten</button>
       <button class="nein" data-a="ablehnen">Nicht behalten</button>
     </div>
@@ -174,7 +200,11 @@ async function zeige() {
     const aktion = b.dataset.a, kommentar = div.querySelector("textarea").value.trim(), titel = div.querySelector("input").value.trim();
     if (aktion === "ueberarbeiten" && !kommentar) return div.querySelector("textarea").focus();
     const { data: s } = await sb.auth.getSession();
-    const { error } = await sb.from("auftraege").insert({ karte_id: div.id.slice(2), aktion, kommentar, titel: titel || null, von: s.session.user.id });
+    // „Posten“ = Behalten + Marker. Der PC verarbeitet es wie Behalten, der Cloud-Job plant es bei Buffer ein.
+    const eintrag = aktion === "posten"
+      ? { aktion: "behalten", kommentar: (MARKER + " " + kommentar).trim() }
+      : { aktion, kommentar };
+    const { error } = await sb.from("auftraege").insert({ karte_id: div.id.slice(2), ...eintrag, titel: titel || null, von: s.session.user.id });
     if (error) return alert(error.message);
     div.remove();
     if (!ziel.querySelector(".karte")) ziel.innerHTML = `<p class="leer">Nichts mehr zu prüfen. Der PC arbeitet die Entscheidungen ab, sobald er an ist.</p>`;
