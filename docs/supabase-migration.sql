@@ -1,3 +1,4 @@
+-- ACHTUNG: NICHT ausführen. Es gilt die verschärfte Fassung auf dem PC (Lesen/Löschen nur für erlaubte Konten). Diese Datei bleibt nur als Feldbeschreibung.
 -- Optionale Felder für die neue Handyseite. Die Seite läuft auch ohne sie (Felder fehlen = Ampel grau, Vorschau normal).
 -- Im Supabase SQL-Editor einmal ausführen. Kostet nichts.
 alter table karten add column if not exists vorschau_480 text;   -- Pfad im Bucket "vorschau", 480p-Fassung

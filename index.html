@@ -73,6 +73,7 @@
   <nav id="nav" hidden>
     <button data-ansicht="pruefen" class="an">Prüfen</button>
     <button data-ansicht="clips">Clips</button>
+    <button data-ansicht="fertig">Fertig</button>
     <button data-ansicht="erledigt">Erledigt</button>
     <button data-ansicht="videos">Videos</button>
     <button data-ansicht="posting">Posting</button>
@@ -172,12 +173,35 @@ async function zeige() {
       <span>${a.erledigt ? "am PC erledigt" : "wartet auf PC"}</span></div>`; }).join("") : `<p class="leer">Noch keine Entscheidungen.</p>`;
     return;
   }
+  if (ansicht === "fertig") {   // 24.11.: fertige Clips auch bei ausgeschaltetem PC
+    const { data: k, error } = await sb.from("karten").select("*").eq("status", "fertig").not("vorschau", "is", null).order("zeit", { ascending: false });
+    if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
+    if (!k.length) return ziel.innerHTML = `<p class="leer">Noch keine fertigen Clips in der Cloud. Der PC lädt sie nach und nach hoch.</p>`;
+    ziel.innerHTML = `<p style="color:var(--leise);font-size:14px">${k.length} fertige Clips, auch ohne PC. Video lädt erst beim Antippen.</p>` + k.map(c => `<div class="karte">
+      <video controls playsinline preload="none" data-pfad="${esc(c.vorschau)}"></video>
+      <div class="kopf"><span>${esc(c.kanal)}</span><span>${(c.hinweise || []).map(esc).join(" ")}</span></div>
+      <div class="titel">${esc(c.titel)}</div>
+      <div class="caption">${esc(c.caption)}</div>
+      <div class="knoepfe" style="grid-template-columns:1fr 1fr"><a class="laden" data-pfad="${esc(c.vorschau)}" href="#"><button class="ja" style="width:100%">Herunterladen</button></a>
+      <button class="kopieren">Text kopieren</button></div></div>`).join("");
+    const pfade = k.map(c => c.vorschau);
+    const [{ data: ansehen }, { data: laden }] = await Promise.all([
+      sb.storage.from("vorschau").createSignedUrls(pfade, 3600),
+      sb.storage.from("vorschau").createSignedUrls(pfade, 3600, { download: true })]);
+    const a = Object.fromEntries((ansehen || []).map(l => [l.path, l.signedUrl])), d = Object.fromEntries((laden || []).map(l => [l.path, l.signedUrl]));
+    ziel.querySelectorAll("video[data-pfad]").forEach(v => { if (a[v.dataset.pfad]) v.src = a[v.dataset.pfad]; });
+    ziel.querySelectorAll("a.laden").forEach(x => { if (d[x.dataset.pfad]) x.href = d[x.dataset.pfad]; });
+    ziel.querySelectorAll(".kopieren").forEach((b, i) => b.onclick = async () => {
+      try { await navigator.clipboard.writeText(k[i].caption || k[i].titel || ""); b.textContent = "Kopiert ✓"; } catch (e) { alert(k[i].caption); }
+    });
+    return;
+  }
   if (ansicht === "clips") return clipsListe(ziel);
   return pruefenQueue(ziel);
 }
 
 // ---------- gemeinsame Helfer ----------
-const BUCKET_VORSCHAU = "vorschau", BUCKET_FERTIG = "fertig";   // fertig: Online-Speicher für Originale (PC-Pipeline lädt später hoch)
+const BUCKET_VORSCHAU = "vorschau";
 const urlCache = new Map();
 async function signiert(bucket, pfad, download) {
   if (!pfad) return null;
@@ -191,7 +215,6 @@ async function signiert(bucket, pfad, download) {
 }
 // 480p-Vorschau bevorzugt (Feld vorschau_480), sonst die normale Vorschau. Die PC-Pipeline füllt vorschau_480 später.
 const vorschauPfad = k => k.vorschau_480 || k.vorschau;
-function dateiname(k) { return (String(k.titel || "clip").toLowerCase().replace(/[^a-z0-9äöüß]+/g, "_").replace(/^_|_$/g, "").slice(0, 60) || "clip") + ".mp4"; }
 
 // Qualitäts-Ampel. Felder in karten.checks (jsonb), die die PC-Pipeline später füllt:
 //   { ton_sync: {status, ms}, laenge: {status, s}, untertitel: {status, hinweis} }   status: gruen | gelb | rot
@@ -213,19 +236,9 @@ function toast(text, undo) {
   if (undo) { const b = document.createElement("button"); b.className = "klein"; b.textContent = "Rückgängig"; b.onclick = () => { undo(); t.remove(); }; t.append(b); }
   document.body.append(t); setTimeout(() => t.remove(), 6000);
 }
-async function dateiLaden(k, knopf) {
-  const alt = knopf.textContent; knopf.disabled = true; knopf.textContent = "…";
-  let u = await signiert(BUCKET_FERTIG, k.datei, dateiname(k)), vorschauNur = false;
-  if (!u) { u = await signiert(BUCKET_VORSCHAU, vorschauPfad(k), dateiname(k)); vorschauNur = !!u; }
-  knopf.disabled = false; knopf.textContent = alt;
-  if (!u) return toast("Datei liegt noch nicht online. Der PC lädt sie beim nächsten Abgleich hoch.");
-  if (vorschauNur) toast("Original noch nicht online, lade die Vorschau.");
-  const a = document.createElement("a"); a.href = u; a.download = dateiname(k); document.body.append(a); a.click(); a.remove();
-}
-
 // ---------- Clips: eine Liste mit Formatfiltern und Suche ----------
 const FORMATE = { "Alle": [], "GTA": ["gta"], "Best of": ["best of", "best-of", "bestof"], "IRL": ["irl"], "Top-5": ["top 5", "top5", "top-5"] };
-const clipsZustand = { format: "Alle", status: "fertig", q: "", seite: 0, daten: [] };
+const clipsZustand = { format: "Alle", status: "alle", q: "", seite: 0, daten: [] };
 const SEITE = 30;
 function formatVon(k) {
   const t = `${k.format || ""} ${k.art || ""} ${k.titel || ""}`.toLowerCase();
@@ -257,15 +270,13 @@ async function clipsListe(ziel, mehr) {
   $("#clipsListe").innerHTML = z.daten.length ? z.daten.map(k => `<div class="karte" data-id="${esc(k.id)}">
       <div class="kopf"><span>${esc(k.kanal || "")} · ${esc(formatVon(k) || k.art || "")}</span><span class="status">${esc(k.status || "")}</span></div>
       <div class="titel">${esc(k.titel)}</div>${ampel(k)}
-      <div class="reihe"><button class="klein" data-x="play">Ansehen</button><button class="klein" data-x="dl">Download</button><button class="klein" data-x="kopie">Text kopieren</button></div>
+      <div class="reihe"><button class="klein" data-x="play">Ansehen</button></div>
       <div class="platzhalter"></div></div>`).join("") : `<p class="leer">Keine Clips gefunden.</p>`;
   $("#clipsMehr").innerHTML = data.length === SEITE ? `<button style="width:100%" id="mehrBtn">Mehr laden</button>` : "";
   if ($("#mehrBtn")) $("#mehrBtn").onclick = () => { z.seite++; clipsListe(ziel, true); };
   $("#clipsListe").onclick = async e => {
     const x = e.target.dataset?.x; if (!x) return;
     const div = e.target.closest(".karte"), k = z.daten.find(d => String(d.id) === div.dataset.id);
-    if (x === "dl") return dateiLaden(k, e.target);
-    if (x === "kopie") { try { await navigator.clipboard.writeText(k.caption || k.titel || ""); e.target.textContent = "Kopiert ✓"; } catch (_) { toast(k.caption || "Kein Text"); } return; }
     // Lazy: Video erst beim Tippen laden, jeweils nur eines gleichzeitig.
     document.querySelectorAll("#clipsListe video").forEach(v => { v.pause(); v.removeAttribute("src"); v.load(); v.remove(); });
     const u = await signiert(BUCKET_VORSCHAU, vorschauPfad(k));

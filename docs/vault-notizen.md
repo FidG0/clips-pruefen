@@ -11,10 +11,10 @@ Handyseite ohne PC ausgebaut (PR auf Basis von PR #1). Grund: Marvin will vom Ha
 - Gründe-Chips (Ton asynchron, zu lang, langweilig …) plus Notiz. Gespeichert im Feld `kommentar` als `[gründe: ton, lang] Text`, ohne neue Spalte. Für das Selbstlernen: PC parst das Präfix, zählt Gründe pro Format/Creator und passt Regelwerk an.
 - **Ampel** Ton / Länge / Text. Länge rechnet die Seite selbst (10 bis 35 s, Ampel gelb 8 bis 40 s). Ton und Text kommen aus `karten.checks`.
 - 480p: Seite nimmt `vorschau_480`, sonst `vorschau`. Nur die aktuelle Karte lädt ihr Video, nächste Signatur wird vorgeholt.
-- Download-Knopf: signierter Link aus Bucket `fertig` (Feld `datei`), sonst Fallback auf Vorschau.
+- Download läuft nur im Reiter **Fertig** (vom Render-Thread), keine zweite Download-Logik in Clips. Umstellung auf Bucket `fertig` / `karten.datei` macht der Render-Thread.
 
 ## Für die PC-Pipeline (offen)
-1. `docs/supabase-migration.sql` im Supabase-SQL-Editor ausführen (Felder, Bucket `fertig`, Policies).
+1. NICHT `docs/supabase-migration.sql` ausführen, es gilt die verschärfte Fassung auf dem PC (Lesen/Löschen nur für erlaubte Konten). Die Datei beschreibt nur die Felder.
 2. Pipeline füllt pro Karte: `dauer`, `format`, `vorschau_480` (ffmpeg 480p, ca. 1 MB pro Clip), `checks` (Ton-Sync-Versatz in ms aus Audio-Peak gegen Bildereignis, Untertitel-Check), optional `datei` (Original hochladen, Free-Plan hat nur 1 GB).
 3. `vault_sync.py` um das Parsen von `[gründe: …]` erweitern.
 4. Alte 720p-Vorschauen nach dem Umstellen löschen, spart Speicher.
