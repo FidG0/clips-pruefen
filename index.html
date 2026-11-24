@@ -225,7 +225,7 @@ async function dateiLaden(k, knopf) {
 
 // ---------- Clips: eine Liste mit Formatfiltern und Suche ----------
 const FORMATE = { "Alle": [], "GTA": ["gta"], "Best of": ["best of", "best-of", "bestof"], "IRL": ["irl"], "Top-5": ["top 5", "top5", "top-5"] };
-const clipsZustand = { format: "Alle", status: "alle", q: "", seite: 0, daten: [] };
+const clipsZustand = { format: "Alle", status: "fertig", q: "", seite: 0, daten: [] };
 const SEITE = 30;
 function formatVon(k) {
   const t = `${k.format || ""} ${k.art || ""} ${k.titel || ""}`.toLowerCase();
@@ -257,7 +257,7 @@ async function clipsListe(ziel, mehr) {
   $("#clipsListe").innerHTML = z.daten.length ? z.daten.map(k => `<div class="karte" data-id="${esc(k.id)}">
       <div class="kopf"><span>${esc(k.kanal || "")} · ${esc(formatVon(k) || k.art || "")}</span><span class="status">${esc(k.status || "")}</span></div>
       <div class="titel">${esc(k.titel)}</div>${ampel(k)}
-      <div class="reihe"><button class="klein" data-x="play">Ansehen</button><button class="klein" data-x="dl">Download</button></div>
+      <div class="reihe"><button class="klein" data-x="play">Ansehen</button><button class="klein" data-x="dl">Download</button><button class="klein" data-x="kopie">Text kopieren</button></div>
       <div class="platzhalter"></div></div>`).join("") : `<p class="leer">Keine Clips gefunden.</p>`;
   $("#clipsMehr").innerHTML = data.length === SEITE ? `<button style="width:100%" id="mehrBtn">Mehr laden</button>` : "";
   if ($("#mehrBtn")) $("#mehrBtn").onclick = () => { z.seite++; clipsListe(ziel, true); };
@@ -265,6 +265,7 @@ async function clipsListe(ziel, mehr) {
     const x = e.target.dataset?.x; if (!x) return;
     const div = e.target.closest(".karte"), k = z.daten.find(d => String(d.id) === div.dataset.id);
     if (x === "dl") return dateiLaden(k, e.target);
+    if (x === "kopie") { try { await navigator.clipboard.writeText(k.caption || k.titel || ""); e.target.textContent = "Kopiert ✓"; } catch (_) { toast(k.caption || "Kein Text"); } return; }
     // Lazy: Video erst beim Tippen laden, jeweils nur eines gleichzeitig.
     document.querySelectorAll("#clipsListe video").forEach(v => { v.pause(); v.removeAttribute("src"); v.load(); v.remove(); });
     const u = await signiert(BUCKET_VORSCHAU, vorschauPfad(k));
