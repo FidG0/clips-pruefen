@@ -42,6 +42,7 @@
   <h1>Clips Prüfen <span id="pcstand"></span></h1>
   <nav id="nav" hidden>
     <button data-ansicht="pruefen" class="an">Prüfen</button>
+    <button data-ansicht="fertig">Fertig</button>
     <button data-ansicht="erledigt">Erledigt</button>
     <button data-ansicht="videos">Videos</button>
     <button id="abmelden">Abmelden</button>
@@ -102,6 +103,29 @@ const PC = "http://100.93.141.24:8800/";
 async function zeige() {
   pcStand();
   const ziel = $("#inhalt");
+  if (ansicht === "fertig") {   // 24.11.: fertige Clips auch bei ausgeschaltetem PC
+    const { data: k, error } = await sb.from("karten").select("*").eq("status", "fertig").not("vorschau", "is", null).order("zeit", { ascending: false });
+    if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
+    if (!k.length) return ziel.innerHTML = `<p class="leer">Noch keine fertigen Clips in der Cloud. Der PC lädt sie nach und nach hoch.</p>`;
+    ziel.innerHTML = `<p style="color:var(--leise);font-size:14px">${k.length} fertige Clips, auch ohne PC. Video lädt erst beim Antippen.</p>` + k.map(c => `<div class="karte">
+      <video controls playsinline preload="none" data-pfad="${esc(c.vorschau)}"></video>
+      <div class="kopf"><span>${esc(c.kanal)}</span><span>${(c.hinweise || []).map(esc).join(" ")}</span></div>
+      <div class="titel">${esc(c.titel)}</div>
+      <div class="caption">${esc(c.caption)}</div>
+      <div class="knoepfe" style="grid-template-columns:1fr 1fr"><a class="laden" data-pfad="${esc(c.vorschau)}" href="#"><button class="ja" style="width:100%">Herunterladen</button></a>
+      <button class="kopieren">Text kopieren</button></div></div>`).join("");
+    const pfade = k.map(c => c.vorschau);
+    const [{ data: ansehen }, { data: laden }] = await Promise.all([
+      sb.storage.from("vorschau").createSignedUrls(pfade, 3600),
+      sb.storage.from("vorschau").createSignedUrls(pfade, 3600, { download: true })]);
+    const a = Object.fromEntries((ansehen || []).map(l => [l.path, l.signedUrl])), d = Object.fromEntries((laden || []).map(l => [l.path, l.signedUrl]));
+    ziel.querySelectorAll("video[data-pfad]").forEach(v => { if (a[v.dataset.pfad]) v.src = a[v.dataset.pfad]; });
+    ziel.querySelectorAll("a.laden").forEach(x => { if (d[x.dataset.pfad]) x.href = d[x.dataset.pfad]; });
+    ziel.querySelectorAll(".kopieren").forEach((b, i) => b.onclick = async () => {
+      try { await navigator.clipboard.writeText(k[i].caption || k[i].titel || ""); b.textContent = "Kopiert ✓"; } catch (e) { alert(k[i].caption); }
+    });
+    return;
+  }
   if (ansicht === "videos") {
     const { data } = await sb.from("info").select("wert").eq("schluessel", "videos").maybeSingle();
     const a = data?.wert?.aktuell, l = data?.wert?.liste || [];
