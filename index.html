@@ -308,8 +308,8 @@ async function clipsListe(ziel, mehr) {
 }
 
 // ---------- Prüfen: Review-Queue (Wischen, Tasten, Notiz) ----------
-// Gleiche Schlüssel wie die Zentrale (24.11.), landen als [gründe: …] im Kommentar
-const GRUENDE = { ende: "Ende zu früh", ton: "Ton asynchron", langweilig: "Langweilig", titel: "Titel schlecht", lang: "Zu lang", ausschnitt: "Ausschnitt falsch", kurz: "Zu kurz", pointe: "Keine Pointe", text: "Untertitel falsch", schnitt: "Schnitt unsauber", kontext: "Kontext fehlt" };
+// 24.11.: dieselben 14 festen Gründe wie in der Zentrale (lernen/gruende_chips.json), Schlüssel nie umbenennen
+const GRUENDE = { ende_zu_frueh: "Ende zu früh", langweilig: "Langweilig / keine Pointe", ton_sync: "Ton passt nicht", titel: "Titel schlecht", zu_lang: "Zu lang", spiel_abgeschnitten: "Bild abgeschnitten", kontext: "Ohne Kontext unverständlich", anfang_zu_spaet: "Anfang fehlt", zu_kurz: "Zu kurz", zu_viele_schnitte: "Zu viele Schnitte", untertitel: "Untertitel falsch", werbepause: "Werbepause / Standbild", heikel: "Heikel", top: "Richtig gut, mehr davon" };
 let queue = [], gewaehlt = new Set();
 async function pruefenQueue(ziel) {
   const [{ data: karten, error }, { data: wartend }] = await Promise.all([
@@ -419,6 +419,33 @@ document.addEventListener("keydown", e => {
   if (e.key === "c") { e.preventDefault(); $("#notiz").focus(); }
   if (e.key === " ") { e.preventDefault(); const v = $("#video"); if (v) v.paused ? v.play() : v.pause(); }
 });
+// 24.11.: Auto-Update ohne Handgriff. GitHub Pages gibt jeder veröffentlichten Fassung ein neues ETag/Last-Modified.
+// Weicht es vom Stand beim Öffnen ab, lädt die Seite sich selbst neu (nicht beim Tippen oder Abspielen).
+let STAND = null;
+async function seitenStand() {
+  const r = await fetch(location.pathname + "?stand=" + Date.now(), { method: "HEAD", cache: "no-store" });
+  return { kenn: r.headers.get("etag") || r.headers.get("last-modified") || "", datum: r.headers.get("last-modified") };
+}
+async function versionPruefen() {
+  try {
+    const s = await seitenStand();
+    if (!s.kenn) return;
+    if (STAND === null) {
+      STAND = s.kenn;
+      const d = s.datum ? new Date(s.datum) : null;
+      $("#fassung").textContent = d ? "Fassung vom " + d.toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+      return;
+    }
+    if (s.kenn === STAND) return;
+    const tippt = document.activeElement?.matches?.("input,textarea");
+    const spielt = [...document.querySelectorAll("video")].some(x => !x.paused);
+    if (!tippt && !spielt) location.reload();
+  } catch (e) {}
+}
+document.body.insertAdjacentHTML("beforeend", `<footer style="text-align:center;font-size:11px;color:var(--leise);padding:0 0 24px">Clipwreck · <span id="fassung"></span> · aktualisiert sich selbst</footer>`);
+versionPruefen();
+setInterval(versionPruefen, 5 * 60 * 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) versionPruefen(); });
 start();
 </script>
 </body>
