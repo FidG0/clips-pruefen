@@ -105,6 +105,7 @@ const URL_ = "https://ycmecdixsdfhcspqeinw.supabase.co";
 const KEY = "sb_publishable_cyLyZvgu7N2RbPv58E7aBA_AigcopE6";   // öffentlich gedacht, Schutz über Login + Zeilenschutz
 const sb = supabase.createClient(URL_, KEY);
 let ansicht = "pruefen";
+let fertigAlle = false;   // 24.11.: Fertig-Reiter zeigt Clips mit Ton-Fehler erst auf Wunsch
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
@@ -185,16 +186,29 @@ async function zeige() {
     return;
   }
   if (ansicht === "fertig") {   // 24.11.: neu gerenderte Originale (Bucket fertig, karten.datei), auch bei ausgeschaltetem PC
-    const { data: k, error } = await sb.from("karten").select("*").not("datei", "is", null).order("zeit", { ascending: false });
+    const { data: alle, error } = await sb.from("karten").select("*").not("datei", "is", null).order("zeit", { ascending: false });
     if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
-    if (!k.length) return ziel.innerHTML = `<p class="leer">Noch keine fertigen Clips in der Cloud. Der PC lädt sie nach und nach hoch.</p>`;
-    ziel.innerHTML = `<p style="color:var(--leise);font-size:14px">${k.length} neu gerenderte Clips, auch ohne PC. Video lädt erst beim Antippen.</p>` + k.map(c => `<div class="karte">
+    if (!alle.length) return ziel.innerHTML = `<p class="leer">Noch keine fertigen Clips in der Cloud. Der PC lädt sie nach und nach hoch.</p>`;
+    // 24.11.: Ton-Ampel rot oder gelb = Ton defekt. Standardmäßig ausgeblendet, kommt nach grünem Neu-Render von selbst zurück.
+    const tonSt = c => c.checks?.ton_sync?.status || "grau";
+    const defekt = c => ["rot", "gelb"].includes(tonSt(c));
+    const nDefekt = alle.filter(defekt).length;
+    const k = fertigAlle ? alle : alle.filter(c => !defekt(c));
+    ziel.innerHTML = `<p style="color:var(--leise);font-size:14px">${k.length} neu gerenderte Clips, auch ohne PC. Video lädt erst beim Antippen.</p>`
+      + (nDefekt ? `<p style="border:1px solid #e5484d;border-radius:10px;padding:10px;font-size:14px"><b>${nDefekt} Clips mit Ton-Fehler</b> ${fertigAlle ? "werden angezeigt" : "sind ausgeblendet"}. Sie werden neu gerendert und erscheinen von selbst wieder, sobald der Ton grün ist.
+        <button class="klein" id="fertig-alle" style="margin-top:6px">${fertigAlle ? "Defekte ausblenden" : "Alle anzeigen"}</button></p>` : "")
+      + (k.length ? "" : `<p class="leer">Gerade kein Clip mit sauberem Ton. Die neu gerenderten kommen von selbst.</p>`)
+      + k.map(c => `<div class="karte">
       <video controls playsinline preload="none" data-pfad="${esc(c.datei)}"></video>
       <div class="kopf"><span>${esc(c.kanal)}</span><span>${(c.hinweise || []).map(esc).join(" ")}</span></div>
+      ${ampel(c)}
+      ${defekt(c) ? `<div style="color:#e5484d;font-weight:700;font-size:14px">Ton defekt, wird neu gerendert</div>` : ""}
       <div class="titel">${esc(c.titel)}</div>
       <div class="caption">${esc(c.caption)}</div>
-      <div class="knoepfe" style="grid-template-columns:1fr 1fr"><a class="laden" data-pfad="${esc(c.datei)}" href="#"><button class="ja" style="width:100%">Herunterladen</button></a>
+      <div class="knoepfe" style="grid-template-columns:1fr 1fr">${tonSt(c) === "rot" ? `<button disabled style="width:100%">Download gesperrt</button>` : `<a class="laden" data-pfad="${esc(c.datei)}" href="#"><button class="ja" style="width:100%">Herunterladen</button></a>`}
       <button class="kopieren">Text kopieren</button></div></div>`).join("");
+    const knopf = ziel.querySelector("#fertig-alle");
+    if (knopf) knopf.onclick = () => { fertigAlle = !fertigAlle; zeige(); };
     const pfade = k.map(c => c.datei);
     const [{ data: ansehen }, { data: laden }] = await Promise.all([
       sb.storage.from("fertig").createSignedUrls(pfade, 3600),
