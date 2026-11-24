@@ -37,6 +37,34 @@
   .zeile span:last-child { color:var(--leise); white-space:nowrap; }
   #login { display:grid; gap:10px; margin-top:20vh; }
   .fehler { color:var(--rot); font-size:14px; }
+
+  nav { overflow-x:auto; scrollbar-width:none; }
+  nav button { flex:0 0 auto; padding:8px 12px; }
+  #abmelden { margin-left:auto; color:var(--leise); }
+  .chips { display:flex; gap:6px; overflow-x:auto; padding:2px 0 8px; scrollbar-width:none; }
+  .chips button { flex:0 0 auto; padding:6px 12px; border-radius:99px; font-size:14px; }
+  .chips button.an { background:var(--text); color:#14111c; border-color:var(--text); }
+  .suche { margin-bottom:8px; }
+  .ampel { display:flex; gap:10px; flex-wrap:wrap; margin:8px 0 2px; font-size:12px; color:var(--leise); }
+  .ampel span { display:inline-flex; align-items:center; gap:5px; }
+  .ampel i { width:11px; height:11px; border-radius:50%; background:#4b4560; display:inline-block; }
+  .ampel .gruen i { background:var(--gruen); } .ampel .gelb i { background:var(--gelb); } .ampel .rot i { background:var(--rot); }
+  .stapel { position:relative; touch-action:pan-y; transition:transform .18s ease, box-shadow .18s; will-change:transform; }
+  .stapel.ziehen { transition:none; }
+  .stapel.t-ja { box-shadow:0 0 0 3px var(--gruen); } .stapel.t-nein { box-shadow:0 0 0 3px var(--rot); } .stapel.t-edit { box-shadow:0 0 0 3px var(--gelb); }
+  .zaehler { display:flex; justify-content:space-between; font-size:13px; color:var(--leise); margin-bottom:8px; }
+  .gruende { display:flex; flex-wrap:wrap; gap:6px; }
+  .gruende button { padding:5px 10px; font-size:13px; border-radius:99px; }
+  .gruende button.an { border-color:var(--gelb); color:var(--gelb); }
+  .tipp { font-size:12px; color:var(--leise); text-align:center; margin-top:10px; }
+  .tastenhilfe { display:none; }
+  @media (hover:hover) and (pointer:fine) { .tastenhilfe { display:block; } }
+  .knoepfe3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px; }
+  .klein { padding:6px 10px; font-size:13px; }
+  .reihe { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+  .status { font-size:12px; border:1px solid var(--linie); border-radius:99px; padding:1px 8px; }
+  #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:#2c2540; border:1px solid var(--linie); border-radius:12px; padding:10px 14px; display:flex; gap:12px; align-items:center; z-index:20; max-width:92vw; }
+  .platz { aspect-ratio:9/16; max-height:60vh; width:100%; background:#000; border-radius:10px; display:grid; place-items:center; color:var(--leise); font-size:14px; }
 </style>
 </head>
 <body>
@@ -44,6 +72,7 @@
   <h1>Clips Prüfen <span id="pcstand"></span></h1>
   <nav id="nav" hidden>
     <button data-ansicht="pruefen" class="an">Prüfen</button>
+    <button data-ansicht="clips">Clips</button>
     <button data-ansicht="erledigt">Erledigt</button>
     <button data-ansicht="videos">Videos</button>
     <button data-ansicht="posting">Posting</button>
@@ -143,49 +172,215 @@ async function zeige() {
       <span>${a.erledigt ? "am PC erledigt" : "wartet auf PC"}</span></div>`; }).join("") : `<p class="leer">Noch keine Entscheidungen.</p>`;
     return;
   }
+  if (ansicht === "clips") return clipsListe(ziel);
+  return pruefenQueue(ziel);
+}
+
+// ---------- gemeinsame Helfer ----------
+const BUCKET_VORSCHAU = "vorschau", BUCKET_FERTIG = "fertig";   // fertig: Online-Speicher für Originale (PC-Pipeline lädt später hoch)
+const urlCache = new Map();
+async function signiert(bucket, pfad, download) {
+  if (!pfad) return null;
+  const key = bucket + "|" + pfad + "|" + (download || "");
+  const c = urlCache.get(key);
+  if (c && c.bis > Date.now()) return c.url;
+  const { data, error } = await sb.storage.from(bucket).createSignedUrl(pfad, 3600, download ? { download } : undefined);
+  if (error || !data) return null;
+  urlCache.set(key, { url: data.signedUrl, bis: Date.now() + 3300 * 1000 });
+  return data.signedUrl;
+}
+// 480p-Vorschau bevorzugt (Feld vorschau_480), sonst die normale Vorschau. Die PC-Pipeline füllt vorschau_480 später.
+const vorschauPfad = k => k.vorschau_480 || k.vorschau;
+function dateiname(k) { return (String(k.titel || "clip").toLowerCase().replace(/[^a-z0-9äöüß]+/g, "_").replace(/^_|_$/g, "").slice(0, 60) || "clip") + ".mp4"; }
+
+// Qualitäts-Ampel. Felder in karten.checks (jsonb), die die PC-Pipeline später füllt:
+//   { ton_sync: {status, ms}, laenge: {status, s}, untertitel: {status, hinweis} }   status: gruen | gelb | rot
+// Länge wird zur Not selbst berechnet (Regelwerk v3: 10 bis 35 s). Fehlt ein Wert, bleibt der Punkt grau.
+function ampel(k, gemessen) {
+  const c = k.checks || {};
+  const dauer = gemessen ?? k.dauer ?? c.laenge?.s;
+  let laenge = c.laenge?.status;
+  if (!laenge && dauer != null) laenge = dauer >= 10 && dauer <= 35 ? "gruen" : (dauer >= 8 && dauer <= 40 ? "gelb" : "rot");
+  const teile = [
+    ["Ton", c.ton_sync?.status, c.ton_sync?.ms != null ? `Versatz ${c.ton_sync.ms} ms` : "Ton-Sync noch nicht geprüft"],
+    ["Länge", laenge, dauer != null ? `${Math.round(dauer * 10) / 10} s (Ziel 10 bis 35 s)` : "Länge unbekannt"],
+    ["Text", c.untertitel?.status, c.untertitel?.hinweis || "Untertitel noch nicht geprüft"]];
+  return `<div class="ampel">${teile.map(([n, s, t]) => `<span class="${esc(s || "")}" title="${esc(t)}"><i></i>${n}</span>`).join("")}</div>`;
+}
+function toast(text, undo) {
+  let t = $("#toast"); if (t) t.remove();
+  t = document.createElement("div"); t.id = "toast"; t.textContent = text;
+  if (undo) { const b = document.createElement("button"); b.className = "klein"; b.textContent = "Rückgängig"; b.onclick = () => { undo(); t.remove(); }; t.append(b); }
+  document.body.append(t); setTimeout(() => t.remove(), 6000);
+}
+async function dateiLaden(k, knopf) {
+  const alt = knopf.textContent; knopf.disabled = true; knopf.textContent = "…";
+  let u = await signiert(BUCKET_FERTIG, k.datei, dateiname(k)), vorschauNur = false;
+  if (!u) { u = await signiert(BUCKET_VORSCHAU, vorschauPfad(k), dateiname(k)); vorschauNur = !!u; }
+  knopf.disabled = false; knopf.textContent = alt;
+  if (!u) return toast("Datei liegt noch nicht online. Der PC lädt sie beim nächsten Abgleich hoch.");
+  if (vorschauNur) toast("Original noch nicht online, lade die Vorschau.");
+  const a = document.createElement("a"); a.href = u; a.download = dateiname(k); document.body.append(a); a.click(); a.remove();
+}
+
+// ---------- Clips: eine Liste mit Formatfiltern und Suche ----------
+const FORMATE = { "Alle": [], "GTA": ["gta"], "Best of": ["best of", "best-of", "bestof"], "IRL": ["irl"], "Top-5": ["top 5", "top5", "top-5"] };
+const clipsZustand = { format: "Alle", status: "alle", q: "", seite: 0, daten: [] };
+const SEITE = 30;
+function formatVon(k) {
+  const t = `${k.format || ""} ${k.art || ""} ${k.titel || ""}`.toLowerCase();
+  for (const [n, w] of Object.entries(FORMATE)) if (w.some(x => t.includes(x))) return n;
+  return "";
+}
+async function clipsListe(ziel, mehr) {
+  const z = clipsZustand;
+  if (!mehr) { z.seite = 0; z.daten = []; }
+  if (!$("#clipsKopf")) {
+    ziel.innerHTML = `<div id="clipsKopf"><input id="clipsQ" class="suche" type="search" placeholder="Suchen (Titel, Kanal, Art)" value="${esc(z.q)}">
+      <div class="chips" id="fChips">${Object.keys(FORMATE).map(n => `<button data-f="${esc(n)}" class="${n === z.format ? "an" : ""}">${esc(n)}</button>`).join("")}</div>
+      <div class="chips" id="sChips"></div></div><div id="clipsListe"></div><div id="clipsMehr"></div>`;
+    let tm; $("#clipsQ").oninput = e => { clearTimeout(tm); tm = setTimeout(() => { z.q = e.target.value; clipsListe(ziel); }, 350); };
+    $("#fChips").onclick = e => { const f = e.target.dataset?.f; if (!f) return; z.format = f; $("#fChips").querySelectorAll("button").forEach(b => b.classList.toggle("an", b.dataset.f === f)); clipsListe(ziel); };
+    $("#sChips").onclick = e => { const s = e.target.dataset?.s; if (!s) return; z.status = s; clipsListe(ziel); };
+  }
+  let q = sb.from("karten").select("*").order("zeit", { ascending: false }).range(z.seite * SEITE, z.seite * SEITE + SEITE - 1);
+  if (z.status !== "alle") q = q.eq("status", z.status);
+  const muster = FORMATE[z.format];
+  if (muster.length) q = q.or(muster.flatMap(m => [`titel.ilike.%${m}%`, `art.ilike.%${m}%`]).join(","));
+  const such = z.q.replace(/[,()%*]/g, " ").trim();
+  if (such) q = q.or(["titel", "kanal", "art"].map(c => `${c}.ilike.%${such}%`).join(","));
+  const { data, error } = await q;
+  if (error) { $("#clipsListe").innerHTML = `<p class="fehler">${esc(error.message)}</p>`; return; }
+  z.daten = mehr ? z.daten.concat(data) : data;
+  const stati = ["alle", ...new Set(z.daten.map(k => k.status).filter(Boolean))];
+  $("#sChips").innerHTML = stati.map(s => `<button data-s="${esc(s)}" class="${s === z.status ? "an" : ""}">${esc(s)}</button>`).join("");
+  $("#clipsListe").innerHTML = z.daten.length ? z.daten.map(k => `<div class="karte" data-id="${esc(k.id)}">
+      <div class="kopf"><span>${esc(k.kanal || "")} · ${esc(formatVon(k) || k.art || "")}</span><span class="status">${esc(k.status || "")}</span></div>
+      <div class="titel">${esc(k.titel)}</div>${ampel(k)}
+      <div class="reihe"><button class="klein" data-x="play">Ansehen</button><button class="klein" data-x="dl">Download</button></div>
+      <div class="platzhalter"></div></div>`).join("") : `<p class="leer">Keine Clips gefunden.</p>`;
+  $("#clipsMehr").innerHTML = data.length === SEITE ? `<button style="width:100%" id="mehrBtn">Mehr laden</button>` : "";
+  if ($("#mehrBtn")) $("#mehrBtn").onclick = () => { z.seite++; clipsListe(ziel, true); };
+  $("#clipsListe").onclick = async e => {
+    const x = e.target.dataset?.x; if (!x) return;
+    const div = e.target.closest(".karte"), k = z.daten.find(d => String(d.id) === div.dataset.id);
+    if (x === "dl") return dateiLaden(k, e.target);
+    // Lazy: Video erst beim Tippen laden, jeweils nur eines gleichzeitig.
+    document.querySelectorAll("#clipsListe video").forEach(v => { v.pause(); v.removeAttribute("src"); v.load(); v.remove(); });
+    const u = await signiert(BUCKET_VORSCHAU, vorschauPfad(k));
+    if (!u) return toast("Keine Vorschau online.");
+    const v = document.createElement("video"); v.controls = true; v.playsInline = true; v.preload = "metadata"; v.src = u; v.style.cssText = "width:100%;max-height:60vh;background:#000;border-radius:10px;margin-top:8px";
+    div.querySelector(".platzhalter").append(v); v.play().catch(() => {});
+  };
+}
+
+// ---------- Prüfen: Review-Queue (Wischen, Tasten, Notiz) ----------
+const GRUENDE = { ton: "Ton asynchron", lang: "Zu lang", kurz: "Zu kurz", langweilig: "Langweilig", titel: "Titel schlecht", text: "Untertitel falsch", schnitt: "Schnitt unsauber", kontext: "Kontext fehlt" };
+let queue = [], gewaehlt = new Set();
+async function pruefenQueue(ziel) {
   const [{ data: karten, error }, { data: wartend }] = await Promise.all([
     sb.from("karten").select("*").eq("status", "pruefen").order("zeit", { ascending: false }),
     sb.from("auftraege").select("karte_id").is("erledigt", null)]);
   if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
   const schon = new Set((wartend || []).map(a => a.karte_id));
-  const offen = karten.filter(k => !schon.has(k.id));
-  if (!offen.length) return ziel.innerHTML = `<p class="leer">Nichts zu prüfen. 🎉</p>`;
-  ziel.innerHTML = offen.map(k => `<div class="karte" id="k_${esc(k.id)}">
-    <video controls playsinline preload="none" data-pfad="${esc(k.vorschau)}"></video>
-    <div class="kopf"><span>${esc(k.kanal)} · ${esc(k.art || "")}</span><span>${k.punkte ? esc(k.punkte) + " Punkte" : ""}</span></div>
-    <div class="titel">${esc(k.titel)}</div>
-    <div class="caption">${esc(k.caption)}</div>
-    ${(k.hinweise || []).map(h => `<div class="hinweis">• ${esc(h)}</div>`).join("")}
-    <div class="knoepfe">
-      <button class="ja posten" data-a="posten">Posten (nächster Slot)</button>
-      <button data-a="behalten">Behalten</button>
-      <button data-a="ueberarbeiten">Überarbeiten</button>
-      <button class="nein" data-a="ablehnen">Nicht behalten</button>
-    </div>
-    <div class="mehr">
-      <textarea placeholder="Kommentar (warum, was ändern)"></textarea>
-      <input placeholder="Neuer Titel (optional)">
-    </div></div>`).join("");
-  const pfade = offen.map(k => k.vorschau).filter(Boolean);
-  if (pfade.length) {
-    const { data: links } = await sb.storage.from("vorschau").createSignedUrls(pfade, 3600);
-    const map = Object.fromEntries((links || []).map(l => [l.path, l.signedUrl]));
-    document.querySelectorAll("video[data-pfad]").forEach(v => { if (map[v.dataset.pfad]) v.src = map[v.dataset.pfad]; });
-  }
-  ziel.querySelectorAll(".karte").forEach(div => div.querySelectorAll("[data-a]").forEach(b => b.onclick = async () => {
-    const aktion = b.dataset.a, kommentar = div.querySelector("textarea").value.trim(), titel = div.querySelector("input").value.trim();
-    if (aktion === "ueberarbeiten" && !kommentar) return div.querySelector("textarea").focus();
-    const { data: s } = await sb.auth.getSession();
-    // „Posten“ = Behalten + Marker. Der PC verarbeitet es wie Behalten, der Cloud-Job plant es bei Buffer ein.
-    const eintrag = aktion === "posten"
-      ? { aktion: "behalten", kommentar: (MARKER + " " + kommentar).trim() }
-      : { aktion, kommentar };
-    const { error } = await sb.from("auftraege").insert({ karte_id: div.id.slice(2), ...eintrag, titel: titel || null, von: s.session.user.id });
-    if (error) return alert(error.message);
-    div.remove();
-    if (!ziel.querySelector(".karte")) ziel.innerHTML = `<p class="leer">Nichts mehr zu prüfen. Der PC arbeitet die Entscheidungen ab, sobald er an ist.</p>`;
-  }));
+  queue = karten.filter(k => !schon.has(k.id));
+  gewaehlt = new Set();
+  naechste(ziel, queue.length);
 }
+async function naechste(ziel, gesamt) {
+  ziel = ziel || $("#inhalt");
+  if (ansicht !== "pruefen") return;
+  const k = queue[0];
+  if (!k) return ziel.innerHTML = `<p class="leer">Nichts mehr zu prüfen. Der PC arbeitet die Entscheidungen ab, sobald er an ist. 🎉</p>`;
+  gewaehlt = new Set(); window.scrollTo(0, 0);
+  ziel.innerHTML = `<div class="zaehler"><span>Noch ${queue.length} offen</span><button class="klein" id="spaeter">Später</button></div>
+    <div class="karte stapel" id="stapel">
+      <div class="platz" id="platz">Lade Video …</div>
+      <div class="kopf"><span>${esc(k.kanal)} · ${esc(k.art || "")}</span><span>${k.punkte ? esc(k.punkte) + " Punkte" : ""}</span></div>
+      <div class="titel">${esc(k.titel)}</div>
+      ${ampel(k)}
+      <div class="caption">${esc(k.caption)}</div>
+      ${(k.hinweise || []).map(h => `<div class="hinweis">• ${esc(h)}</div>`).join("")}
+    </div>
+    <div class="karte">
+      <div class="gruende">${Object.entries(GRUENDE).map(([i, t]) => `<button data-g="${i}">${t}</button>`).join("")}</div>
+      <div class="mehr"><textarea id="notiz" placeholder="Notiz (warum, was ändern). Fließt ins Regelwerk ein."></textarea><input id="neuerTitel" placeholder="Neuer Titel (optional)"></div>
+      <div class="knoepfe3" style="margin-top:12px">
+        <button class="nein" data-a="ablehnen">Verwerfen</button>
+        <button data-a="ueberarbeiten">Überarbeiten</button>
+        <button class="ja" data-a="behalten">Behalten</button>
+      </div>
+      <div class="knoepfe"><button class="posten" data-a="posten" style="grid-column:1/-1">Posten (nächster Slot)</button></div>
+      <div class="tipp">Karte wischen: rechts behalten, links verwerfen, hoch überarbeiten.</div>
+      <div class="tipp tastenhilfe">Tasten: J behalten · K verwerfen · R überarbeiten · P posten · Leertaste Play · N Notiz</div>
+    </div>`;
+  // Video erst für die aktuelle Karte laden, die nächste Signatur schon vorholen (Video selbst bleibt ungeladen).
+  signiert(BUCKET_VORSCHAU, vorschauPfad(k)).then(u => {
+    const p = $("#platz"); if (!p || queue[0] !== k) return;
+    if (!u) return p.textContent = "Keine Vorschau online";
+    const v = document.createElement("video"); v.controls = true; v.playsInline = true; v.preload = "metadata"; v.src = u;
+    v.style.cssText = "width:100%;max-height:60vh;background:#000;border-radius:10px;display:block";
+    v.onloadedmetadata = () => { const a = $("#stapel .ampel"); if (a) a.outerHTML = ampel(k, v.duration); };
+    p.replaceWith(v); v.id = "video";
+  });
+  if (queue[1]) signiert(BUCKET_VORSCHAU, vorschauPfad(queue[1]));
+  $("#spaeter").onclick = () => { queue.push(queue.shift()); naechste(); };
+  ziel.querySelectorAll(".gruende [data-g]").forEach(b => b.onclick = () => { const g = b.dataset.g; gewaehlt.has(g) ? gewaehlt.delete(g) : gewaehlt.add(g); b.classList.toggle("an"); });
+  ziel.querySelectorAll("[data-a]").forEach(b => b.onclick = () => entscheide(b.dataset.a));
+  wischen($("#stapel"));
+}
+async function entscheide(aktion) {
+  const k = queue[0]; if (!k || entscheide.laeuft) return;
+  const notiz = $("#notiz").value.trim(), titel = $("#neuerTitel").value.trim();
+  if (aktion === "ueberarbeiten" && !notiz) { $("#notiz").focus(); return toast("Bei Überarbeiten bitte kurz sagen, was geändert werden soll."); }
+  entscheide.laeuft = true;
+  try {
+    const { data: s } = await sb.auth.getSession();
+    // Gründe stehen als [gründe: ton, lang] vor der Notiz, so kann der PC sie fürs Regelwerk auslesen, ohne neue Spalte.
+    const gr = gewaehlt.size ? `[gründe: ${[...gewaehlt].join(", ")}] ` : "";
+    const marker = aktion === "posten" ? MARKER + " " : "";
+    const echt = aktion === "posten" ? "behalten" : aktion;
+    const { data, error } = await sb.from("auftraege").insert({ karte_id: k.id, aktion: echt, kommentar: (marker + gr + notiz).trim(), titel: titel || null, von: s.session.user.id }).select("id").maybeSingle();
+    if (error) return toast("Fehler: " + error.message);
+    queue.shift();
+    naechste();
+    toast({ behalten: "Behalten", ablehnen: "Verworfen", ueberarbeiten: "Zum Überarbeiten", posten: "Zum Posten" }[aktion], data?.id ? async () => {
+      const { error: e } = await sb.from("auftraege").delete().eq("id", data.id).is("erledigt", null);
+      if (e) return toast("Rückgängig nicht möglich: " + e.message);
+      queue.unshift(k); naechste();
+    } : null);
+  } finally { entscheide.laeuft = false; }
+}
+function wischen(el) {
+  let x0, y0, dx = 0, dy = 0, aktiv = false;
+  const schwelle = 90;
+  el.addEventListener("touchstart", e => {
+    if (e.target.closest("video,textarea,input,button")) return;
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = dy = 0; aktiv = true; el.classList.add("ziehen");
+  }, { passive: true });
+  el.addEventListener("touchmove", e => {
+    if (!aktiv) return;
+    dx = e.touches[0].clientX - x0; dy = e.touches[0].clientY - y0;
+    if (Math.abs(dy) > Math.abs(dx) * 1.4 && dy > -20) { aktiv = false; el.style.transform = ""; el.className = "karte stapel"; return; }   // normales Scrollen
+    el.style.transform = `translate(${dx}px,${Math.min(0, dy)}px) rotate(${dx / 30}deg)`;
+    el.classList.toggle("t-ja", dx > schwelle); el.classList.toggle("t-nein", dx < -schwelle); el.classList.toggle("t-edit", dy < -schwelle && Math.abs(dx) < schwelle);
+  }, { passive: true });
+  el.addEventListener("touchend", () => {
+    if (!aktiv) return; aktiv = false;
+    el.classList.remove("ziehen", "t-ja", "t-nein", "t-edit"); el.style.transform = "";
+    if (dx > schwelle) entscheide("behalten");
+    else if (dx < -schwelle) entscheide("ablehnen");
+    else if (dy < -schwelle) entscheide("ueberarbeiten");
+  });
+}
+document.addEventListener("keydown", e => {
+  if (ansicht !== "pruefen" || e.ctrlKey || e.metaKey || e.altKey || !$("#stapel")) return;
+  if (e.target.closest?.("textarea,input")) { if (e.key === "Escape") e.target.blur(); return; }
+  const m = { j: "behalten", ArrowRight: "behalten", k: "ablehnen", ArrowLeft: "ablehnen", r: "ueberarbeiten", p: "posten" }[e.key];
+  if (m) { e.preventDefault(); return entscheide(m); }
+  if (e.key === "n") { e.preventDefault(); $("#notiz").focus(); }
+  if (e.key === " ") { e.preventDefault(); const v = $("#video"); if (v) v.paused ? v.play() : v.pause(); }
+});
 start();
 </script>
 </body>
