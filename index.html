@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<title>Clips Prüfen</title>
+<title>Clipwreck</title>
 <link rel="icon" href="icons/favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/clipwreck-192.png">
 <link rel="apple-touch-icon" href="icons/clipwreck-180.png">
@@ -79,7 +79,7 @@
 </head>
 <body>
 <header>
-  <h1>Clips Prüfen <span id="pcstand"></span></h1>
+  <h1>Clipwreck <span id="pcstand"></span></h1>
   <nav id="nav" hidden>
     <button data-ansicht="pruefen" class="an">Prüfen</button>
     <button data-ansicht="clips">Clips</button>
@@ -345,7 +345,7 @@ async function naechste(ziel, gesamt) {
       </div>
       <div class="knoepfe"><button class="posten" data-a="posten" style="grid-column:1/-1" ${sperrgrund(k) ? "disabled" : ""}>${sperrgrund(k) ? "Posten gesperrt: " + esc(sperrgrund(k)) : "Posten (nächster Slot)"}</button></div>
       <div class="tipp">Karte wischen: rechts behalten, links verwerfen, hoch überarbeiten.</div>
-      <div class="tipp tastenhilfe">Tasten: J behalten · K verwerfen · R überarbeiten · P posten · Leertaste Play · N Notiz</div>
+      <div class="tipp tastenhilfe">Tasten: J behalten · N verwerfen · U überarbeiten · P posten · Leertaste Play · C Notiz</div>
     </div>`;
   // Video erst für die aktuelle Karte laden, die nächste Signatur schon vorholen (Video selbst bleibt ungeladen).
   signiert(BUCKET_VORSCHAU, vorschauPfad(k)).then(u => {
@@ -379,8 +379,10 @@ async function entscheide(aktion) {
     queue.shift();
     naechste();
     toast({ behalten: "Behalten", ablehnen: "Verworfen", ueberarbeiten: "Zum Überarbeiten", posten: "Zum Posten" }[aktion], data?.id ? async () => {
-      const { error: e } = await sb.from("auftraege").delete().eq("id", data.id).is("erledigt", null);
+      // .select() zeigt, ob wirklich eine Zeile gelöscht wurde. Hat der PC den Auftrag schon erledigt, gibt es nichts mehr zurückzunehmen.
+      const { data: weg, error: e } = await sb.from("auftraege").delete().eq("id", data.id).is("erledigt", null).select("id");
       if (e) return toast("Rückgängig nicht möglich: " + e.message);
+      if (!weg?.length) return toast("Zu spät: Der PC hat das schon erledigt.");
       queue.unshift(k); naechste();
     } : null);
   } finally { entscheide.laeuft = false; }
@@ -410,9 +412,10 @@ function wischen(el) {
 document.addEventListener("keydown", e => {
   if (ansicht !== "pruefen" || e.ctrlKey || e.metaKey || e.altKey || !$("#stapel")) return;
   if (e.target.closest?.("textarea,input")) { if (e.key === "Escape") e.target.blur(); return; }
-  const m = { j: "behalten", ArrowRight: "behalten", k: "ablehnen", ArrowLeft: "ablehnen", r: "ueberarbeiten", p: "posten" }[e.key];
+  // 24.11.: wie in der Zentrale J/N/U, die alten Tasten K und R gehen weiter
+  const m = { j: "behalten", ArrowRight: "behalten", n: "ablehnen", k: "ablehnen", ArrowLeft: "ablehnen", u: "ueberarbeiten", r: "ueberarbeiten", p: "posten" }[e.key];
   if (m) { e.preventDefault(); return entscheide(m); }
-  if (e.key === "n") { e.preventDefault(); $("#notiz").focus(); }
+  if (e.key === "c") { e.preventDefault(); $("#notiz").focus(); }
   if (e.key === " ") { e.preventDefault(); const v = $("#video"); if (v) v.paused ? v.play() : v.pause(); }
 });
 start();
