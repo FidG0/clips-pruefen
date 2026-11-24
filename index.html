@@ -308,7 +308,8 @@ async function clipsListe(ziel, mehr) {
 }
 
 // ---------- Prüfen: Review-Queue (Wischen, Tasten, Notiz) ----------
-const GRUENDE = { ton: "Ton asynchron", lang: "Zu lang", kurz: "Zu kurz", langweilig: "Langweilig", titel: "Titel schlecht", text: "Untertitel falsch", schnitt: "Schnitt unsauber", kontext: "Kontext fehlt" };
+// Gleiche Schlüssel wie die Zentrale (24.11.), landen als [gründe: …] im Kommentar
+const GRUENDE = { ende: "Ende zu früh", ton: "Ton asynchron", langweilig: "Langweilig", titel: "Titel schlecht", lang: "Zu lang", ausschnitt: "Ausschnitt falsch", kurz: "Zu kurz", pointe: "Keine Pointe", text: "Untertitel falsch", schnitt: "Schnitt unsauber", kontext: "Kontext fehlt" };
 let queue = [], gewaehlt = new Set();
 async function pruefenQueue(ziel) {
   const [{ data: karten, error }, { data: wartend }] = await Promise.all([
