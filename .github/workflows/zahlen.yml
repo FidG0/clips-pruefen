@@ -1,8 +1,7 @@
 name: Zahlen (täglich)
 # Täglich 06:15 Berlin (05:15 UTC im Winter): Buffer-Zahlen holen, 10 Tage nachverfolgen, auswerten, Regelwerk anpassen.
+# Gestartet von Supabase (pg_cron + Trigger auf auftraege, Funktion public.github_dispatch), GitHub-Zeitpläne feuerten in diesem Repo nie.
 on:
-  schedule:
-    - cron: "15 5 * * *"
   workflow_dispatch:
 concurrency: posting
 permissions:

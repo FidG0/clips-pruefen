@@ -155,7 +155,11 @@ def auswerten(metriken, alt_auswertung, jetzt):
     zeilen, gruppen = gruppieren(metriken)
     gesamt = statistics.median([z["views_d3"] for z in zeilen]) if zeilen else 0
     heute = jetzt.date().isoformat()
-    regel, aend = regelwerk_anpassen(gruppen, (alt_auswertung or {}).get("regelwerk_auto", {}), gesamt, heute)
+    alt_regel = (alt_auswertung or {}).get("regelwerk_auto", {})
+    if any(x.get("datum") == heute for x in (alt_auswertung or {}).get("aenderungen", [])):
+        regel, aend = alt_regel, []  # höchstens ein Regelwerk-Schritt pro Tag, auch wenn der Job zweimal läuft
+    else:
+        regel, aend = regelwerk_anpassen(gruppen, alt_regel, gesamt, heute)
     historie = ((alt_auswertung or {}).get("aenderungen", []) + aend)[-200:]
     top = sorted(zeilen, key=lambda z: z["score"], reverse=True)
     return {"stand": jetzt.isoformat(), "anzahl_posts": len(zeilen), "median_views_d3": gesamt,

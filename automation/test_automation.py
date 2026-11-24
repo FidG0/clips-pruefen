@@ -111,6 +111,14 @@ class Analyse(unittest.TestCase):
         self.assertTrue(a["vorschlaege"])
         self.assertTrue(all("grund" in x and "datum" in x for x in a["aenderungen"]))
 
+    def test_nur_ein_regelwerk_schritt_pro_tag(self):
+        jetzt, posts, geplant = self.daten()
+        m = zahlen.metriken_aktualisieren({}, posts, geplant, jetzt)
+        a1 = zahlen.auswerten(m, {}, jetzt)
+        a2 = zahlen.auswerten(m, a1, jetzt)
+        self.assertEqual(a2["neu_heute"], [])
+        self.assertEqual(a2["regelwerk_auto"]["slot_gewichte"], a1["regelwerk_auto"]["slot_gewichte"])
+
     def test_tag_11_wird_nicht_mehr_verfolgt(self):
         jetzt, posts, geplant = self.daten()
         posts[0]["dueAt"] = (jetzt - dt.timedelta(days=12)).isoformat()
