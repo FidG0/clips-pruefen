@@ -35,3 +35,10 @@ Eine "Posten"-Freigabe wird nur geplant, wenn alles drei stimmt, sonst steht sie
 2. Neu gerendertes Original vorhanden (`karten.datei` im Fach `fertig`). Alte Charge ohne Original bleibt gesperrt.
 3. Ton-Sync-Ampel grün (`karten.checks.ton_sync.status == "gruen"`). Gelb, rot oder ungeprüft bleibt gesperrt.
 Die Handyseite zeigt den Grund direkt am Posten-Knopf. Slots 16:00/19:00/20:30, also höchstens 3 Posts pro Tag und Plattform.
+
+## Wer startet die Jobs (seit 24.11.2026)
+GitHub-Zeitpläne (cron) liefen in diesem Repo nie. Deshalb startet Supabase die Workflows per `workflow_dispatch`:
+- Trigger `posten_freigabe` auf `auftraege`: jede neue "[posten]"-Freigabe startet posten.yml sofort.
+- pg_cron `posten-15min` (Minute 7/22/37/52): posten.yml, damit gesperrte Freigaben neu geprüft werden.
+- pg_cron `zahlen-taeglich` (05:15 UTC): zahlen.yml. Das Regelwerk ändert sich höchstens einmal pro Tag.
+Funktion `public.github_dispatch(workflow)` liest den GitHub-Token aus dem Supabase Vault (Name `github_dispatch`, fein granular, nur dieses Repo, Recht "Actions: Read and write"). Ohne Token passiert nichts.
