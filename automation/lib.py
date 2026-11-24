@@ -92,36 +92,45 @@ class Buffer:
             raise RuntimeError(f"Buffer-Fehler: {r['errors']}")
         return r["data"]
 
-    def kanal(self, name):
-        """Liefert (organizationId, channel) für den TikTok-Kanal mit diesem Namen."""
+    def kanaele(self, name):
+        """Liefert (organizationId, {plattform: channel}) für alle Kanäle, deren Name `name` enthält."""
         orgs = self.gql("query { account { organizations { id name } } }")["account"]["organizations"]
         for org in orgs:
             # IDs werden direkt eingesetzt, damit wir keine Scalar-Typnamen raten müssen.
-            kanaele = self.gql(
+            alle = self.gql(
                 "query { channels(input: {organizationId: %s}) { id name displayName service } }" % json.dumps(org["id"])
             )["channels"]
-            for k in kanaele:
-                if k["service"].lower() == "tiktok" and name.lower() in (k["name"] + " " + (k.get("displayName") or "")).lower():
-                    return org["id"], k
-        raise RuntimeError(f"Kein TikTok-Kanal '{name}' in Buffer gefunden.")
+            treffer = {k["service"].lower(): k for k in alle
+                       if name.lower() in (k["name"] + " " + (k.get("displayName") or "")).lower()}
+            if treffer:
+                return org["id"], treffer
+        raise RuntimeError(f"Keine Buffer-Kanäle mit '{name}' gefunden.")
 
-    def post_planen(self, kanal_id, text, video_url, faellig_utc):
+    def kanal(self, name, service="tiktok"):
+        org, k = self.kanaele(name)
+        if service not in k:
+            raise RuntimeError(f"Kein {service}-Kanal '{name}' in Buffer.")
+        return org, k[service]
+
+    def post_planen(self, kanal_id, text, video_url, faellig_utc, metadata=None):
         q = """mutation($i: CreatePostInput!) { createPost(input: $i) {
                  ... on PostActionSuccess { post { id dueAt } }
                  ... on MutationError { message } } }"""
         eingabe = {"channelId": kanal_id, "text": text, "schedulingType": "automatic", "mode": "customScheduled",
                    "dueAt": faellig_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"), "needsApproval": False,
                    "assets": [{"video": {"url": video_url}}]}
+        if metadata:
+            eingabe["metadata"] = metadata
         r = self.gql(q, {"i": eingabe})["createPost"]
         if "post" not in r:
             raise RuntimeError(f"Buffer lehnt ab: {r.get('message')}")
         return r["post"]
 
-    def gesendete_posts(self, org_id, kanal_id, max_seiten=10):
+    def gesendete_posts(self, org_id, kanal_ids, max_seiten=10):
         q = """query($a: String) {
-                 posts(first: 50, after: $a, input: {organizationId: %s, filter: {status: [sent], channelIds: [%s]}}) {
-                   edges { node { id text dueAt metrics { type name value unit } metricsUpdatedAt } }
-                   pageInfo { endCursor hasNextPage } } }""" % (json.dumps(org_id), json.dumps(kanal_id))
+                 posts(first: 50, after: $a, input: {organizationId: %s, filter: {status: [sent], channelIds: %s}}) {
+                   edges { node { id text dueAt channelId metrics { type name value unit } metricsUpdatedAt } }
+                   pageInfo { endCursor hasNextPage } } }""" % (json.dumps(org_id), json.dumps(list(kanal_ids) if isinstance(kanal_ids, (list, tuple, set)) else [kanal_ids]))
         posts, nach = [], None
         for _ in range(max_seiten):
             d = self.gql(q, {"a": nach})["posts"]
@@ -156,27 +165,55 @@ def naechster_slot(belegt_utc, jetzt_utc=None, cfg=CONFIG):
 
 
 # ---------------------------------------------------------------- Caption
-def caption_bauen(karte, cfg=CONFIG):
-    """TikTok-Text: Caption der Karte (oder Titel) plus passende Hashtags, ohne Zeilenumbrüche
-    (TikTok-API unterstützt keine Umbrüche)."""
-    text = (karte.get("caption") or karte.get("titel") or "").strip()
-    vorhanden = {t.lower() for t in re.findall(r"#\w+", text)}
-    # Reihenfolge = Wichtigkeit: Creator, Marke, Format, Rest (bei max_hashtags wird hinten gekürzt)
+def _hashtags(karte, cfg, vorhanden):
+    """Reihenfolge = Wichtigkeit: Creator, Marke, Format, Rest."""
     tags = []
     for creator, t in cfg["hashtags_nach_creator"].items():
         if creator.lower() in (str(karte.get("kanal")) + " " + str(karte.get("titel"))).lower():
             tags += t
     tags += cfg["hashtags_basis"][:1]
-    tags += cfg["hashtags_nach_format"].get(karte.get("art") or "", [])
+    tags += cfg["hashtags_nach_format"].get(format_von(karte) or "", [])
     tags += cfg["hashtags_basis"][1:]
     neu = []
     for t in tags:
         if t.lower() not in vorhanden and t.lower() not in {x.lower() for x in neu}:
             neu.append(t)
-    platz = max(0, cfg["max_hashtags"] - len(vorhanden))
-    text = re.sub(r"\s*\n+\s*", " ", text)
-    voll = (text + " " + " ".join(neu[:platz])).strip()
-    return voll[:2200]
+    return neu
+
+
+def format_von(karte):
+    return karte.get("format") or karte.get("art")
+
+
+def caption_bauen(karte, cfg=CONFIG, plattform="tiktok"):
+    """Text pro Plattform. TikTok: ohne Zeilenumbrüche (API kann keine). Instagram: mit Umbruch vor Hashtags.
+    YouTube: Beschreibung mit #shorts."""
+    p = cfg.get("plattformen", {}).get(plattform, {})
+    text = (karte.get("caption") or karte.get("titel") or "").strip()
+    vorhanden = {t.lower() for t in re.findall(r"#\w+", text)}
+    neu = [t for t in p.get("hashtags_extra", []) if t.lower() not in vorhanden] + _hashtags(karte, cfg, vorhanden)
+    max_tags = p.get("max_hashtags", cfg["max_hashtags"])
+    neu = neu[:max(0, max_tags - len(vorhanden))]
+    if plattform == "tiktok":
+        text = re.sub(r"\s*\n+\s*", " ", text)
+        return (text + " " + " ".join(neu)).strip()[:2200]
+    return (text + ("\n\n" if neu else "") + " ".join(neu)).strip()[:p.get("max_zeichen", 2200)]
+
+
+def metadata_bauen(karte, plattform, cfg=CONFIG):
+    """Buffer PostInputMetaData je Plattform (Feldnamen laut developers.buffer.com, Stand 24.11.2026)."""
+    p = cfg.get("plattformen", {}).get(plattform, {})
+    if plattform == "youtube":
+        titel = (karte.get("titel") or karte.get("caption") or "Clip").strip()
+        titel = re.sub(r"\s+", " ", titel)
+        if "#shorts" not in titel.lower() and len(titel) <= 90:
+            titel += " #shorts"
+        kat = p.get("kategorie_nach_format", {}).get(format_von(karte) or "", p.get("kategorie", "24"))
+        return {"youtube": {"title": titel[:100], "categoryId": kat, "privacy": "public", "madeForKids": False,
+                            "notifySubscribers": True, "type": "short"}}
+    if plattform == "instagram":
+        return {"instagram": {"type": "reel", "shouldShareToFeed": True}}
+    return None
 
 
 def titel_typ(titel):

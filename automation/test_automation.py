@@ -48,6 +48,40 @@ class Caption(unittest.TestCase):
         self.assertEqual(lib.titel_typ("Top 5 GTA Momente"), "liste")
 
 
+class Plattformen(unittest.TestCase):
+    k = {"caption": "Er fährt einfach rein\nund dann das", "format": "GTA", "kanal": "Zarbex", "titel": "„Machs gut Loser“", "dauer": 22}
+
+    def test_youtube(self):
+        t = lib.caption_bauen(self.k, plattform="youtube")
+        self.assertIn("#shorts", t)
+        self.assertIn("\n", t)
+        m = lib.metadata_bauen(self.k, "youtube")["youtube"]
+        self.assertTrue(m["title"].endswith("#shorts"))
+        self.assertLessEqual(len(m["title"]), 100)
+        self.assertEqual(m["categoryId"], "20")
+        self.assertEqual((m["privacy"], m["madeForKids"], m["type"]), ("public", False, "short"))
+
+    def test_instagram(self):
+        t = lib.caption_bauen(self.k, plattform="instagram")
+        self.assertLessEqual(len([w for w in t.split() if w.startswith("#")]), 5)
+        self.assertEqual(lib.metadata_bauen(self.k, "instagram"), {"instagram": {"type": "reel", "shouldShareToFeed": True}})
+
+    def test_tiktok_ohne_metadata(self):
+        self.assertIsNone(lib.metadata_bauen(self.k, "tiktok"))
+        self.assertNotIn("\n", lib.caption_bauen(self.k, plattform="tiktok"))
+
+    def test_score_normiert_je_plattform(self):
+        jetzt = dt.datetime(2026, 12, 10, 6, 0, tzinfo=UTC)
+        due = (jetzt - dt.timedelta(days=4)).isoformat()
+        posts = [{"id": f"{p}{i}", "dueAt": due, "channelId": p, "metrics": [{"type": "views", "value": v * (i + 1)}]}
+                 for p, v in (("yt", 100), ("tt", 10000)) for i in range(3)]
+        m = zahlen.metriken_aktualisieren({}, posts, [], jetzt, {"yt": "youtube", "tt": "tiktok"})
+        zeilen, gruppen = zahlen.gruppieren(m)
+        self.assertEqual(set(gruppen["plattform"]), {"youtube", "tiktok"})
+        self.assertAlmostEqual(gruppen["plattform"]["youtube"]["median_score"], 1.0)
+        self.assertAlmostEqual(gruppen["plattform"]["tiktok"]["median_score"], 1.0)
+
+
 class Analyse(unittest.TestCase):
     def daten(self):
         jetzt = dt.datetime(2026, 12, 10, 6, 0, tzinfo=UTC)
@@ -57,7 +91,7 @@ class Analyse(unittest.TestCase):
             views = {"16:00": 1000, "19:00": 3000, "20:30": 2000}[slot] + i
             due = (jetzt - dt.timedelta(days=4)).isoformat()
             posts.append({"id": f"p{i}", "text": "t", "dueAt": due,
-                          "metrics": [{"type": "views", "value": views}, {"type": "likes", "value": views / 10},
+                          "channelId": "c1", "metrics": [{"type": "views", "value": views}, {"type": "likes", "value": views / 10},
                                       {"type": "totalTimeWatched", "value": views * 12}]})
             geplant.append({"buffer_id": f"p{i}", "status": "geplant", "titel": f"Clip {i}", "art": "GTA" if i % 2 else "IRL",
                             "slot": slot, "dauer": 12 if i < 6 else 22, "titel_typ": "zitat", "kanal": "Zarbex"})
@@ -100,3 +134,35 @@ class Csv(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PostenProbelauf(unittest.TestCase):
+    def test_drei_plattformen_ohne_buffer(self):
+        import os
+        import posten
+
+        class FakeSb:
+            gespeichert = {}
+
+            def info_lesen(self, k, d=None):
+                return {}
+
+            def info_schreiben(self, k, w):
+                FakeSb.gespeichert[k] = w
+
+            def holen(self, t, q):
+                return [{"id": 7, "karte_id": "k1", "kommentar": "[posten]", "titel": None,
+                         "karten": {"titel": "Zarbex fährt rein", "caption": "lol", "format": "GTA", "kanal": "Zarbex", "vorschau": "a.mp4"}}]
+
+        alt = posten.Supabase
+        posten.Supabase = FakeSb
+        os.environ.pop("BUFFER_LIVE", None)
+        try:
+            posten.main()
+        finally:
+            posten.Supabase = alt
+        z = FakeSb.gespeichert["posting"]
+        self.assertEqual(z["modus"], "probelauf")
+        self.assertEqual(sorted(e["plattform"] for e in z["probelauf"]), ["instagram", "tiktok", "youtube"])
+        self.assertEqual(z["erledigte_auftraege"], [])
+        self.assertTrue(all(e["status"] == "probelauf" for e in z["probelauf"]))
