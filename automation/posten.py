@@ -171,7 +171,8 @@ def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt):
             zustand["erledigte_auftraege"].append(a["id"])
     ergebnis = []
     for g in zustand["geplant"]:
-        if (g.get("auftrag_id") or 0) > bis or g.get("status") != "geplant":
+        # loeschen_offen: am 25.11. schon in der Anzeige storniert (Seite sollte sofort leer sein), Buffer-Löschung steht noch aus
+        if (g.get("auftrag_id") or 0) > bis or not (g.get("status") == "geplant" or g.get("loeschen_offen")):
             continue
         zeile = {"buffer_id": g.get("buffer_id"), "plattform": g.get("plattform"), "slot_lokal": g.get("slot_lokal"), "titel": g.get("titel")}
         if not ist_live or buf is None:
@@ -183,9 +184,15 @@ def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt):
             try:
                 buf.post_loeschen(g["buffer_id"])
                 g.update(status="storniert", hinweis="Stopp 25.11.: in Buffer gelöscht, wartet auf neue Bestätigung.")
+                g.pop("loeschen_offen", None)
                 zeile["status"] = "in Buffer gelöscht"
-            except Exception as fehler:   # z. B. schon von Marvin gelöscht: dann ist er weg, Abgleich setzt ihn auf geloescht
-                zeile["status"] = "Fehler: " + str(fehler)[:160]
+            except Exception as fehler:   # meist schon von Marvin gelöscht (nicht gefunden): dann ist er weg
+                if "not" in str(fehler).lower() and "found" in str(fehler).lower():
+                    g.update(status="storniert", hinweis="Stopp 25.11.: war in Buffer schon gelöscht.")
+                    g.pop("loeschen_offen", None)
+                    zeile["status"] = "war schon gelöscht"
+                else:
+                    zeile["status"] = "Fehler: " + str(fehler)[:160]
         ergebnis.append(zeile)
         print(f"stopp     {g.get('plattform')} {g.get('slot_lokal')} {zeile['status']}  {g.get('titel')}")
     if ergebnis:
@@ -237,7 +244,7 @@ def main():
         alter = 1e9
     # Verbindungs-Status für die Kanäle-Seite der Zentrale: bei jeder Freigabe, sonst höchstens stündlich
     korrektur = (sb.info_lesen("texte_korrektur", {}) or {}).get("freigabe")
-    stopp_offen = any(g.get("status") == "geplant" and (g.get("auftrag_id") or 0) <= int((sb.info_lesen("posten_stopp", {}) or {}).get("bis_auftrag") or 0)
+    stopp_offen = any((g.get("status") == "geplant" or g.get("loeschen_offen")) and (g.get("auftrag_id") or 0) <= int((sb.info_lesen("posten_stopp", {}) or {}).get("bis_auftrag") or 0)
                       for g in zustand["geplant"])
     if ist_live and (offen or alter > 3600 or korrektur or stopp_offen):
         try:
