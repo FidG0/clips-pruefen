@@ -56,7 +56,7 @@ class Plattformen(unittest.TestCase):
         self.assertIn("#shorts", t)
         self.assertIn("\n", t)
         m = lib.metadata_bauen(self.k, "youtube")["youtube"]
-        self.assertTrue(m["title"].endswith("#shorts"))
+        self.assertNotIn("#", m["title"])   # 25.11.: echter Titel, #shorts steht in der Beschreibung
         self.assertLessEqual(len(m["title"]), 100)
         self.assertEqual(m["categoryId"], "20")
         self.assertEqual((m["privacy"], m["madeForKids"], m["type"]), ("public", False, "short"))
@@ -268,10 +268,12 @@ class WunschSlots(unittest.TestCase):
         t, grund = lib.sofort_slot([], "tiktok", j)
         self.assertIsNone(grund)
         self.assertEqual(t, j + dt.timedelta(minutes=5))
-        self.assertIn("Abstand", lib.sofort_slot([g("2026-11-25T13:30")], "tiktok", j)[1])
-        self.assertIn("schon einen Bonus", lib.sofort_slot([g("2026-11-25T22:00")], "tiktok", j)[1])
-        self.assertIn("schon einen Bonus", lib.sofort_slot([g("2026-11-25T10:00", bonus=True)], "tiktok", j)[1])
-        self.assertIsNone(lib.sofort_slot([g("2026-11-25T22:00")], "youtube", j)[1])
+        # 25.11. abends: nie mehr gesperrt, nur Warnungen
+        self.assertEqual(lib.sofort_slot([g("2026-11-25T13:30")], "tiktok", j), (j + dt.timedelta(minutes=5), None))
+        self.assertIn("Abstand", " ".join(lib.sofort_warnungen([g("2026-11-25T13:30")], "tiktok", j)))
+        self.assertIn("schon einen Bonus", " ".join(lib.sofort_warnungen([g("2026-11-25T22:00")], "tiktok", j)))
+        self.assertIn("schon einen Bonus", " ".join(lib.sofort_warnungen([g("2026-11-25T10:00", bonus=True)], "tiktok", j)))
+        self.assertEqual(lib.sofort_warnungen([g("2026-11-25T22:00")], "youtube", j), [])
         self.assertEqual(lib.wunsch_slots(lib.wunsch_kommentar({"tiktok": "sofort"})), {"tiktok": "sofort"})
 
     def test_sofort_im_job(self):
@@ -307,3 +309,149 @@ class Sperren(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- 25.11.: Titel, Beschreibung, Hashtags je Plattform
+BLOCK = ("Titel: Trymacs dachte, Verstümmelung ist ein Gaming-Begriff 💀\n\nBeschreibung:\nTrymacs liest in GTA 6 die Einstellungen, "
+         "erfährt was Verstümmelung bedeutet und lässt es trotzdem an 😂\n\n🎥 Trymacs auf Twitch (Fanpage, eigener Schnitt)\n"
+         "#trymacs #gta6 #gta")
+XQC = ("Titel: xQc's first car theft in GTA 6 goes WRONG 😭\n\nBeschreibung:\nxQc tries to steal a car in GTA 6 for the first time 😭\n"
+       "Who did it better on their first try? 👇\n\n#xqc #gta6 #gta #twitchclips\n\nYouTube Shorts: xQc's first car theft goes wrong 😭 #clipwreck #xqc")
+TRENDS = {"hashtags": [{"tag": "gta6", "gewicht": 500}, {"tag": "byalexz", "gewicht": 150}, {"tag": "gta6gameplay", "gewicht": 116},
+                       {"tag": "zarbex", "gewicht": 109}, {"tag": "streamingdeutschland", "gewicht": 105}, {"tag": "casino", "gewicht": 99},
+                       {"tag": "rohatclips", "gewicht": 56}],
+          "streamer": [{"name": "trymacs"}, {"name": "zarbex"}],
+          "top_clips": [{"kanal": "by.alexz"}, {"kanal": "rohatclips"}]}
+
+
+class Texte(unittest.TestCase):
+    def karten(self):
+        return [{"caption": BLOCK, "titel": "Trymacs dachte, Verstümmelung ist ein Gaming-Begriff 💀", "kanal": "fanpage", "art": "GTA"},
+                {"caption": XQC, "titel": "xQc's first car theft in GTA 6 goes WRONG 😭", "kanal": "fanpage"},
+                {"caption": "Er fährt einfach rein #gta6", "titel": "Zarbex crasht", "kanal": "Zarbex", "art": "GTA"}]
+
+    def test_kein_block_mehr_im_posttext(self):
+        for k in self.karten():
+            for p in ("tiktok", "youtube", "instagram"):
+                t = lib.texte_bauen(k, p, trends=TRENDS)
+                text = lib.texte_text(t, p)
+                self.assertNotRegex(text.lower(), r"titel\s*:|beschreibung\s*:|youtube shorts\s*:")
+                self.assertIsNone(lib.texte_pruefen(t, p), (p, text))
+                if p == "tiktok":
+                    self.assertNotIn("\n", text)
+                    self.assertTrue(text.startswith(k["titel"]))
+                if p == "instagram":
+                    self.assertLessEqual(len(set(lib._tags_aus(text))), 5)
+                if p == "youtube":
+                    m = lib.metadata_bauen(k, p, teile=t)["youtube"]
+                    self.assertLessEqual(len(m["title"]), 100)
+                    self.assertNotIn("#", m["title"])
+                    self.assertIn("#shorts", text)
+                    self.assertLessEqual(len(set(lib._tags_aus(text))), 3)
+
+    def test_quelle_als_eigener_satz(self):
+        t = lib.texte_bauen(self.karten()[0], "instagram")
+        self.assertIn("\n\n🎥 Trymacs auf Twitch (Fanpage, eigener Schnitt)", t["beschreibung"])
+        x = lib.texte_bauen(self.karten()[1], "tiktok")
+        self.assertIn("🎥 xQc (Fanpage, eigener Schnitt)", x["beschreibung"])
+
+    def test_youtube_titel_aus_shorts_zeile(self):
+        k = self.karten()[1]
+        self.assertEqual(lib.texte_bauen(k, "youtube")["titel"], "xQc's first car theft goes wrong 😭")
+        self.assertNotIn("YouTube", lib.texte_bauen(k, "instagram")["beschreibung"])
+        # eigener Titel von Marvin gilt auch auf YouTube
+        self.assertEqual(lib.texte_bauen({**k, "titel": "Mein Titel"}, "youtube", titel_gesetzt=True)["titel"], "Mein Titel")
+        # Karte hat später einen anderen Titel bekommen als der Block: der gilt
+        self.assertEqual(lib.texte_bauen({**k, "titel": "Neuer Titel"}, "youtube")["titel"], "Neuer Titel")
+
+    def test_trends_nur_passend(self):
+        k = self.karten()[0]
+        tags = lib.trend_tags(k, TRENDS)
+        self.assertNotIn("#byalexz", tags)        # fremde Kanal-Marke
+        self.assertNotIn("#rohatclips", tags)
+        self.assertNotIn("#zarbex", tags)         # anderer Streamer, nicht im Clip
+        self.assertNotIn("#casino", tags)         # Glücksspiel nie
+        self.assertIn("#gta6gameplay", lib.trend_tags(k, TRENDS, ohne={"#gta6"}))
+        self.assertEqual(lib.trend_tags(k, None), [])
+
+    def test_gluecksspiel_im_bearbeiteten_text_sperrt(self):
+        self.assertIn("Glücksspiel", lib.texte_pruefen({"titel": "x", "beschreibung": "Ab ins Casino", "hashtags": []}, "tiktok"))
+        self.assertIn("Glücksspiel", lib.texte_pruefen({"titel": "x", "beschreibung": "y", "hashtags": ["#roulette"]}, "tiktok"))
+        self.assertIn("Titel:", lib.texte_pruefen({"titel": "x", "beschreibung": "Titel: y", "hashtags": []}, "tiktok"))
+        self.assertIn("höchstens 5", lib.texte_pruefen({"titel": "x", "beschreibung": "y", "hashtags": [f"#t{i}" for i in range(6)]}, "instagram"))
+
+    def test_kommentar_hin_und_zurueck(self):
+        texte = {"tiktok": {"titel": "Hook 💀", "beschreibung": "Satz.\n\n🎥 Quelle", "hashtags": ["#a", "b"]}}
+        k = "[posten] slot:tiktok=sofort " + lib.texte_kommentar(texte)
+        back = lib.texte_aus_kommentar(k)
+        self.assertEqual(back["tiktok"]["titel"], "Hook 💀")
+        self.assertEqual(back["tiktok"]["hashtags"], ["#a", "#b"])
+        self.assertEqual(lib.wunsch_slots(k), {"tiktok": "sofort"})
+        self.assertEqual(lib.ohne_texte(k), "[posten] slot:tiktok=sofort")
+        self.assertEqual(lib.texte_aus_kommentar("[posten] texte:kaputt!!"), {})
+
+
+class TexteImJob(unittest.TestCase):
+    def test_bearbeiteter_text_wird_gepostet(self):
+        t = {p: {"titel": "Mein Hook 💀", "beschreibung": "Mein Satz.", "hashtags": ["#zarbex"]} for p in ("tiktok", "youtube", "instagram")}
+        z = WunschSlots()._lauf("[posten] " + lib.texte_kommentar(t))
+        tik = next(e for e in z if e["plattform"] == "tiktok")
+        self.assertEqual(tik["text"], "Mein Hook 💀 Mein Satz. #zarbex")
+        yt = next(e for e in z if e["plattform"] == "youtube")
+        self.assertEqual(yt["metadata"]["youtube"]["title"], "Mein Hook 💀")
+
+    def test_gluecksspiel_im_bearbeiteten_text_bleibt_gesperrt(self):
+        t = {"tiktok": {"titel": "Hook", "beschreibung": "Ab ins Casino", "hashtags": []}}
+        self.assertEqual(WunschSlots()._lauf("[posten] " + lib.texte_kommentar(t)), [])
+
+    def test_korrektur_nur_mit_freigabe_und_nie_gesendete(self):
+        import posten
+        jetzt = dt.datetime(2026, 11, 25, 20, 0, tzinfo=dt.timezone.utc)
+        alt = "Titel: Trymacs dachte 💀 Beschreibung: Trymacs liest #trymacs"
+        geplant = [{"auftrag_id": 5, "plattform": "tiktok", "status": "geplant", "buffer_id": "b1", "text": alt,
+                    "slot_utc": "2026-11-25T21:00:00+00:00"},
+                   {"auftrag_id": 5, "plattform": "instagram", "status": "geplant", "buffer_id": "b2", "text": alt,
+                    "slot_utc": "2026-11-25T21:00:00+00:00"},
+                   {"auftrag_id": 5, "plattform": "youtube", "status": "geplant", "buffer_id": "b3", "text": "sauber",
+                    "slot_utc": "2026-11-25T21:00:00+00:00"}]
+
+        class Sb:
+            def __init__(self, info):
+                self.info, self.geschrieben = info, {}
+
+            def info_lesen(self, k, d=None):
+                return self.info
+
+            def info_schreiben(self, k, w):
+                self.geschrieben[k] = w
+
+            def holen(self, t, q):
+                return [{"id": 5, "karte_id": "k5", "kommentar": "[posten]", "titel": None,
+                         "karten": {"caption": BLOCK, "titel": "Trymacs dachte, Verstümmelung ist ein Gaming-Begriff 💀"}}]
+
+        class Buf:
+            bearbeitet = []
+
+            def gesendete_posts(self, org, ids, max_seiten=10):
+                return [{"id": "b2"}]
+
+            def post_bearbeiten(self, i, text, meta):
+                Buf.bearbeitet.append((i, text))
+
+        z = {"geplant": [dict(g) for g in geplant]}
+        sb = Sb({})
+        posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, True, None, jetzt)
+        self.assertEqual(Buf.bearbeitet, [])                       # ohne Freigabe nichts
+        self.assertEqual(len(sb.geschrieben["texte_korrektur"]["vorschau"]), 2)
+        sb = Sb({"freigabe": True})
+        posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, True, None, jetzt)
+        self.assertEqual([i for i, _ in Buf.bearbeitet], ["b1"])     # b2 ist schon gesendet, b3 schon sauber
+        self.assertNotIn("Titel:", Buf.bearbeitet[0][1])
+        erg = {e["buffer_id"]: e["status"] for e in sb.geschrieben["texte_korrektur"]["ergebnis"]}
+        self.assertEqual(erg, {"b1": "korrigiert", "b2": "schon veröffentlicht, nicht angefasst"})
+        self.assertFalse(sb.geschrieben["texte_korrektur"]["freigabe"])
+        self.assertEqual(z["geplant"][1]["status"], "gesendet")
+        Buf.bearbeitet = []
+        sb = Sb({"freigabe": True})
+        posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, False, None, jetzt)
+        self.assertEqual(Buf.bearbeitet, [])                       # Probelauf ändert nie etwas
