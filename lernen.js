@@ -7,7 +7,7 @@
   "use strict";
   const nav = $("#nav");
   if (!nav || nav.querySelector('[data-ansicht="lernen"]')) return;
-  const L = { d: null, id: null, tipps: [], keine: false, auf: false, aufVorTipp: false, antw: {}, text: "", gesehen: 0, raf: 0, urls: {}, zeit: 0 };
+  const L = { d: null, id: null, tipps: [], blind: [], keineBlind: false, keine: false, auf: false, aufVorTipp: false, antw: {}, text: "", gesehen: 0, raf: 0, urls: {}, zeit: 0 };
   const PNAME = { text: "Gesagtes", laut: "Lautstärke", chat: "Chat", szene: "Bildwechsel" };
   const sek = t => (t == null ? "–" : Number(t).toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " s");
   const pz = x => (x == null ? "–" : Math.round(x * 100) + " %");
@@ -72,10 +72,10 @@
   };
 
   function laden(id) {
-    L.id = id; L.tipps = []; L.keine = false; L.auf = false; L.aufVorTipp = false; L.antw = {}; L.text = ""; L.gesehen = 0;
+    L.id = id; L.tipps = []; L.blind = []; L.keineBlind = false; L.keine = false; L.auf = false; L.aufVorTipp = false; L.antw = {}; L.text = ""; L.gesehen = 0;
     try { const e = JSON.parse(localStorage.getItem(ENTWURF(id)) || "null"); if (e) Object.assign(L, e); } catch (x) {}
   }
-  function merken() { try { localStorage.setItem(ENTWURF(L.id), JSON.stringify({ tipps: L.tipps, keine: L.keine, auf: L.auf, aufVorTipp: L.aufVorTipp, antw: L.antw, text: L.text, gesehen: L.gesehen })); } catch (x) {} }
+  function merken() { try { localStorage.setItem(ENTWURF(L.id), JSON.stringify({ tipps: L.tipps, blind: L.blind, keineBlind: L.keineBlind, keine: L.keine, auf: L.auf, aufVorTipp: L.aufVorTipp, antw: L.antw, text: L.text, gesehen: L.gesehen })); } catch (x) {} }
 
   async function holen() {
     if (!L.d || Date.now() - L.zeit > 30000) {
@@ -131,7 +131,7 @@
     if (ansicht !== "lernen") return;
     const d = L.d, alle = (d.clips || []), off = offen(), fertig = erledigt();
     if (!L.id || !alle.some(c => c.id === L.id) || fertig.has(L.id)) laden((off[0] || alle[0] || {}).id);
-    const c = clip(), m = d.messung?.aktuell_auf_allen || {};
+    const ms = d.messung || {}, c = clip(), m = (ms.pruef_neu ? (ms.ergebnis === "übernommen" ? ms.pruef_neu : ms.pruef_alt) : ms.aktuell_auf_allen) || {};
     let h = `<div class="lzkpis"><div class="lzkpi ${off.length ? "rot" : ""}"><b>${off.length}</b><span>offen von ${alle.length}</span></div>
       <div class="lzkpi gold"><b>${pz(m.trefferquote)}</b><span>Pointe-Treffer</span></div><div class="lzkpi"><b>${d.antworten ?? 0}</b><span>Antworten</span></div></div>`;
     if (!c) { ziel.innerHTML = h + `<div class="lzk"><p class="leer">Kein Lernset. Am PC in der Zentrale unter Lernen „Neue Clips vorbereiten“ drücken.</p></div>` + fort(d); return; }
@@ -152,8 +152,9 @@
   function fort(d) {
     const ms = d.messung || {}, a = ms.aktuell_auf_allen || {}, s = ms.start_auf_allen || {};
     return `<details class="lzk"><summary style="cursor:pointer;font-family:var(--display);font-size:13px;letter-spacing:1.3px;text-transform:uppercase;color:#9fb6d6">Lernfortschritt</summary>
-      <div class="lzein"><b>Pointe-Schätzer v${d.schaetzer?.version ?? 1}</b><span>Treffer ${pz(a.trefferquote)} (Start ${pz(s.trefferquote)}), ${a.fehlalarme ?? 0} Fehlalarme</span></div>
-      ${ms.pruef_neu ? `<div class="lzein"><b>Faire Prüfung</b><span>${ms.pruefen} spätere Clips: vorher ${pz(ms.pruef_alt?.trefferquote)}, neu ${pz(ms.pruef_neu?.trefferquote)}. ${esc(ms.ergebnis || "")}</span></div>` : `<div class="lzein"><span>Ab 8 Clips mit Pointe stelle ich den Schätzer fair neu ein.</span></div>`}
+      ${ms.pruef_neu ? `<div class="lzein"><b>Faire Prüfung (vorher → nachher)</b><span>${ms.pruefen} spätere Clips: ${pz(ms.pruef_alt?.trefferquote)} → ${pz(ms.pruef_neu?.trefferquote)} Treffer, F1 ${ms.pruef_alt?.f1 ?? "–"} → ${ms.pruef_neu?.f1 ?? "–"}. ${esc(ms.ergebnis || "")}</span></div>`
+        : `<div class="lzein"><span>Ab 8 Clips mit blind getippter Pointe (vor dem Aufdecken) stelle ich den Schätzer fair neu ein.</span></div>`}
+      <div class="lzein"><b>Pointe-Schätzer v${d.schaetzer?.version ?? 1}</b><span>auf allen blinden Pointen ${pz(a.trefferquote)} (Start ${pz(s.trefferquote)}), ${a.fehlalarme ?? 0} Fehlalarme${(d.schaetzer?.version ?? 1) > 1 ? ", inkl. Einstell-Daten" : ""}</span></div>
       ${(d.einsichten || []).map(e => `<div class="lzein"><b>${esc(e.titel)}</b><span>${esc(e.text)}</span></div>`).join("")}</details>`;
   }
   function verdrahten(c) {
@@ -166,21 +167,21 @@
       if (v && !v.paused) { L.gesehen = Math.max(L.gesehen, v.currentTime); if (g) g.setAttribute("width", (Math.min(dd, L.gesehen) / dd) * W); }
       if (ansicht === "lernen") L.raf = requestAnimationFrame(lauf); };
     L.raf = requestAnimationFrame(lauf);
-    if (v) v.addEventListener("ended", () => { L.gesehen = c.dauer; if (!L.auf) { L.auf = true; merken(); zeitNeu(); toast("Schätzung aufgedeckt"); } });
+    if (v) v.addEventListener("ended", () => { L.gesehen = c.dauer; if (!L.auf) { if (L.tipps.length || L.keine) { L.auf = true; merken(); zeitNeu(); toast("Schätzung aufgedeckt"); } else toast("Tippe erst deine Pointe oder „Keine Pointe“, dann decke ich auf"); } });
     $("#lzZeit").onclick = e => { const r = e.currentTarget.getBoundingClientRect(); if (v) v.currentTime = ((e.clientX - r.left) / r.width) * c.dauer; };
     $("#lzPointe").onclick = () => {
       if (!v) return; const t = Math.round(v.currentTime * 100) / 100;
       if (L.keine) { L.keine = false; if (L.antw.pointe === "keine Pointe") delete L.antw.pointe; frageNeu(); }
-      if (!L.tipps.some(x => Math.abs(x - t) < .3)) L.tipps.push(t); L.tipps.sort((a, b) => a - b); merken(); zeitNeu();
+      if (!L.tipps.some(x => Math.abs(x - t) < .3)) { L.tipps.push(t); if (!L.auf) L.blind.push(t); } L.tipps.sort((a, b) => a - b); merken(); zeitNeu();
       const b = $("#lzBlitz"); b.classList.remove("an"); void b.offsetWidth; b.classList.add("an"); try { navigator.vibrate?.(15); } catch (x) {}
     };
-    $("#lzWeg").onclick = () => { L.tipps.pop(); merken(); zeitNeu(); };
-    $("#lzKeine").onclick = () => { L.keine = !L.keine; if (L.keine) { L.tipps = []; L.antw.pointe = "keine Pointe"; } else if (L.antw.pointe === "keine Pointe") delete L.antw.pointe; merken(); zeitNeu(); frageNeu(); };
+    $("#lzWeg").onclick = () => { const t = L.tipps.pop(); L.blind = L.blind.filter(x => x !== t); merken(); zeitNeu(); };
+    $("#lzKeine").onclick = () => { L.keine = !L.keine; L.keineBlind = L.keine && !L.auf; if (L.keine) { L.tipps = []; L.blind = []; L.antw.pointe = "keine Pointe"; } else if (L.antw.pointe === "keine Pointe") delete L.antw.pointe; merken(); zeitNeu(); frageNeu(); };
     $("#lzAuf").onclick = () => { if (!L.auf && !L.tipps.length && !L.keine) L.aufVorTipp = true; L.auf = !L.auf; merken(); zeitNeu(); };
     document.querySelectorAll("[data-lq]").forEach(b => b.onclick = () => {
       const q = b.dataset.lq, o = b.dataset.lo;
       if (b.dataset.lm) { const s = new Set(L.antw[q] || []); s.has(o) ? s.delete(o) : s.add(o); L.antw[q] = [...s]; } else L.antw[q] = L.antw[q] === o ? undefined : o;
-      if (q === "pointe") { L.keine = L.antw.pointe === "keine Pointe"; if (L.keine) L.tipps = []; zeitNeu(); }
+      if (q === "pointe") { L.keine = L.antw.pointe === "keine Pointe"; L.keineBlind = L.keine && !L.auf; if (L.keine) { L.tipps = []; L.blind = []; } zeitNeu(); }
       merken(); frageNeu();
     });
     const t = $("#lzText"); if (t) t.oninput = () => { L.text = t.value; merken(); };
@@ -193,7 +194,7 @@
     if (!Object.keys(antw).length && !L.tipps.length && !L.keine) return toast("Erst eine Frage beantworten oder Pointe tippen");
     const knopf = $("#lzSpeichern"); knopf.disabled = true;
     const { data: s } = await sb.auth.getSession();
-    const { error } = await sb.from("lern_antworten").insert({ clip_id: c.id, von: s.session.user.id, daten: { antworten: antw, pointen: L.tipps, keine_pointe: L.keine,
+    const { error } = await sb.from("lern_antworten").insert({ clip_id: c.id, von: s.session.user.id, daten: { antworten: antw, pointen: L.tipps, pointen_blind: L.blind, keine_pointe: L.keine, keine_blind: L.keineBlind,
       angesehen_s: Math.round(Math.max(L.gesehen, v?.currentTime || 0) * 10) / 10, marker_vorher: L.aufVorTipp, marker_version: c.marker_version } });
     knopf.disabled = false;
     if (error) { $("#lzFehler").textContent = /relation|schema cache|does not exist/i.test(error.message) ? "Noch nicht eingerichtet: einmal das SQL für lern_antworten in Supabase ausführen. Deine Antwort bleibt hier gespeichert." : "Fehler: " + error.message; return; }
