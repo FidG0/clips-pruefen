@@ -1,6 +1,8 @@
 """Freigaben von der Handyseite -> Buffer: TikTok, YouTube Shorts, Instagram Reels (Clipwreck).
 
-Läuft alle 15 Min in GitHub Actions. Slots 16:00 / 19:00 / 20:30 (Berlin), je Plattform max. 3 pro Tag.
+Läuft alle 15 Min in GitHub Actions. Slots aus config.json (13:00/16:00/19:00/20:30 plus Bonus 22:00, Berlin),
+je Plattform max. 5 pro Tag. Den Bonus-Slot gibt es nur auf ausdrücklichen Wunsch, „nächster Slot“ nimmt ihn nie.
+Buffer Free: max. 10 geplante Posts je Kanal, darüber bleibt die Freigabe offen.
 Ohne BUFFER_LIVE=ja nur Probelauf: info.posting.probelauf zeigt, was geplant würde, nichts geht an Buffer.
 
 Freigabe = Auftrag mit aktion 'behalten' und Kommentar, der mit '[posten]' beginnt
@@ -10,7 +12,7 @@ import datetime as dt
 import urllib.parse
 from zoneinfo import ZoneInfo
 
-from lib import (CONFIG, Buffer, Supabase, caption_bauen, format_von, live, metadata_bauen,
+from lib import (CONFIG, Buffer, Supabase, buffer_voll, caption_bauen, format_von, live, metadata_bauen,
                  naechster_slot, slot_pruefen, sperrgrund, titel_typ, wunsch_slots)
 
 STANDARD = {"erledigte_auftraege": [], "geplant": [], "probelauf": [], "gesperrt": [], "letzter_lauf": None}
@@ -99,6 +101,11 @@ def main():
         link = None
         wunsch = wunsch_slots(a.get("kommentar"))   # Kalender: nur gewählte Plattformen, je im gewählten Slot
         ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
+        voll = [g for g in (buffer_voll(zustand["geplant"], p) for p in ziel) if g]
+        if voll:   # Buffer Free: max. 10 geplante je Kanal. Freigabe bleibt offen, nächster Lauf versucht es wieder.
+            gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"), "grund": voll[0]})
+            print(f"wartet   {k.get('titel')}: {voll[0]}")
+            continue
         slots, hinweise = {}, {}
         for p in ziel:
             grund_slot = slot_pruefen(wunsch[p], belegt[p]) if p in wunsch else None

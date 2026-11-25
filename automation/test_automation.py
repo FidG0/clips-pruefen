@@ -17,7 +17,7 @@ class Slots(unittest.TestCase):
     def test_naechster_slot_heute(self):
         jetzt = dt.datetime(2026, 11, 24, 10, 0, tzinfo=BER).astimezone(UTC)
         s = lib.naechster_slot(set(), jetzt).astimezone(BER)
-        self.assertEqual((s.day, s.hour, s.minute), (24, 16, 0))
+        self.assertEqual((s.day, s.hour, s.minute), (24, 13, 0))
 
     def test_belegt_und_vorlauf(self):
         jetzt = dt.datetime(2026, 11, 24, 18, 45, tzinfo=BER).astimezone(UTC)  # 19:00 nur 15 Min entfernt
@@ -25,12 +25,12 @@ class Slots(unittest.TestCase):
         self.assertEqual((s.hour, s.minute), (20, 30))
         belegt = {s.astimezone(UTC).isoformat()}
         s2 = lib.naechster_slot(belegt, jetzt).astimezone(BER)
-        self.assertEqual((s2.day, s2.hour), (25, 16))
+        self.assertEqual((s2.day, s2.hour), (25, 13))  # 22:00 ist Bonus, nie automatisch
 
     def test_sommerzeit(self):
         jetzt = dt.datetime(2026, 7, 1, 8, 0, tzinfo=BER).astimezone(UTC)
         s = lib.naechster_slot(set(), jetzt)
-        self.assertEqual(s.hour, 14)  # 16:00 MESZ = 14:00 UTC
+        self.assertEqual(s.hour, 11)  # 13:00 MESZ = 11:00 UTC
 
 
 class Caption(unittest.TestCase):
@@ -243,6 +243,24 @@ class WunschSlots(unittest.TestCase):
         self.assertEqual(len(z), 1)
         self.assertNotEqual(z[0]["slot_utc"], ziel.isoformat())
         self.assertIn("Wunsch-Slot ging nicht", z[0]["hinweis"])
+
+    def test_bonus_nur_auf_wunsch(self):
+        jetzt = dt.datetime(2026, 11, 24, 21, 0, tzinfo=BER).astimezone(UTC)   # nur 22:00 (Bonus) übrig
+        self.assertEqual(lib.naechster_slot(set(), jetzt).astimezone(BER).day, 25)
+        self.assertIsNone(lib.slot_pruefen(lib.slot_aus_lokal("2026-11-24T22:00"), set(), jetzt))
+
+    def test_fuenf_pro_tag(self):
+        tag = ["2026-11-27T" + s for s in ("13:00", "16:00", "19:00", "20:30")]
+        belegt = {lib.slot_aus_lokal(z).isoformat() for z in tag}
+        self.assertIsNone(lib.slot_pruefen(lib.slot_aus_lokal("2026-11-27T22:00"), belegt, self.jetzt))
+
+    def test_buffer_free_grenze(self):
+        zukunft = [{"plattform": "tiktok", "status": "geplant", "slot_utc": (self.jetzt + dt.timedelta(hours=i + 1)).isoformat()} for i in range(10)]
+        self.assertIn("Buffer Free", lib.buffer_voll(zukunft, "tiktok", self.jetzt))
+        self.assertIsNone(lib.buffer_voll(zukunft[:9], "tiktok", self.jetzt))
+        self.assertIsNone(lib.buffer_voll(zukunft, "youtube", self.jetzt))
+        alt = [dict(g, slot_utc=(self.jetzt - dt.timedelta(hours=1)).isoformat()) for g in zukunft]
+        self.assertIsNone(lib.buffer_voll(alt, "tiktok", self.jetzt))
 
     def test_ohne_wunsch_alle_plattformen(self):
         self.assertEqual(sorted(e["plattform"] for e in self._lauf("[posten]")), ["instagram", "tiktok", "youtube"])

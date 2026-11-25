@@ -143,7 +143,7 @@ class Buffer:
 
 # ---------------------------------------------------------------- Slots
 def naechster_slot(belegt_utc, jetzt_utc=None, cfg=CONFIG):
-    """Nächster freier Slot (16:00/19:00/20:30 Berlin), der mind. X Min in der Zukunft liegt.
+    """Nächster freier Slot (Slots aus config.json ohne Bonus-Slots, Berlin), der mind. X Min in der Zukunft liegt.
 
     belegt_utc: Menge von ISO-Strings (UTC) bereits geplanter Posts.
     """
@@ -155,6 +155,8 @@ def naechster_slot(belegt_utc, jetzt_utc=None, cfg=CONFIG):
         datum = (jetzt + dt.timedelta(days=tag)).date()
         pro_tag = sum(1 for b in belegt if b.date() == datum)
         for s in cfg["slots"]:
+            if s in cfg.get("bonus_slots", []):   # Bonus-Slot nur, wenn Marvin ihn ausdrücklich wählt
+                continue
             if pro_tag >= cfg["max_posts_pro_tag"]:
                 break
             h, m = map(int, s.split(":"))
@@ -193,6 +195,26 @@ def slot_aus_lokal(text, cfg=CONFIG):
     """'2026-11-26T16:00' (Berliner Zeit, wie im Kalender) -> UTC-datetime."""
     t = dt.datetime.fromisoformat(str(text)[:16])
     return t.replace(tzinfo=ZoneInfo(cfg["zeitzone"])).astimezone(dt.timezone.utc)
+
+
+def buffer_voll(geplant, plattform, jetzt_utc=None, cfg=CONFIG):
+    """Grund oder None. Buffer Free erlaubt nur N geplante (noch nicht gesendete) Posts je Kanal gleichzeitig."""
+    grenze = cfg.get("buffer_max_geplant")
+    if not grenze:
+        return None
+    jetzt = jetzt_utc or dt.datetime.now(dt.timezone.utc)
+    offen = 0
+    for g in geplant:
+        if g.get("plattform", "tiktok") != plattform or g.get("status") != "geplant":
+            continue
+        try:
+            if dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00")) > jetzt:
+                offen += 1
+        except (KeyError, ValueError):
+            pass
+    if offen >= grenze:
+        return f"Buffer Free: schon {offen} von {grenze} Posts auf {plattform} geplant. Wird nach dem nächsten gesendeten Post neu versucht."
+    return None
 
 
 def slot_pruefen(slot_utc, belegt_utc, jetzt_utc=None, cfg=CONFIG):

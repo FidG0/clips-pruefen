@@ -367,8 +367,8 @@ async function pruefenQueue(ziel) {
   naechste(ziel, queue.length);
 }
 // 25.11.: Slot selbst wählen (wie der Kalender in der Zentrale). Gleiche Regeln wie automation/lib.py slot_pruefen:
-// nur 16:00/19:00/20:30 Berliner Zeit, 30 Min Vorlauf, frei auf allen drei Plattformen, max. 3 pro Tag. posten.py prüft nochmal.
-const SLOTS = ["16:00", "19:00", "20:30"], PLATTF = ["tiktok", "youtube", "instagram"], VORLAUF_MIN = 30, MAX_TAG = 3;
+// 4 feste Slots plus Bonus 22:00 (Berliner Zeit), 30 Min Vorlauf, frei auf allen drei Plattformen, max. 5 pro Tag. posten.py prüft nochmal.
+const SLOTS = ["13:00", "16:00", "19:00", "20:30", "22:00"], BONUS = ["22:00"], PLATTF = ["tiktok", "youtube", "instagram"], VORLAUF_MIN = 30, MAX_TAG = 5, BUFFER_MAX = 10;
 let slotCache = { t: 0, geplant: [] };
 function berlinUtc(datum, hhmm) {   // "2026-11-26", "16:00" (Berliner Wanduhr) -> Date in UTC, unabhängig von der Handy-Zeitzone
   const [y, m, d] = datum.split("-").map(Number), [h, mi] = hhmm.split(":").map(Number);
@@ -396,9 +396,11 @@ async function slotsFuellen() {
       const t = berlinUtc(tag, s);
       const frei = t.getTime() >= frueh && PLATTF.every(p => !B[p].has(t.getTime())
         && [...B[p]].filter(x => berlinTag(new Date(x)) === tag).length < MAX_TAG);
-      if (frei) opt.push(`<option value="${t.toISOString()}">${t.toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</option>`);
+      if (frei) opt.push(`<option value="${t.toISOString()}">${t.toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}${BONUS.includes(s) ? " ★ Bonus" : ""}</option>`);
     }
   }
+  const voll = PLATTF.filter(p => slotCache.geplant.filter(g => (g.plattform || "tiktok") === p && g.status === "geplant" && new Date(g.slot_utc) > new Date()).length >= BUFFER_MAX);
+  if (voll.length) opt.unshift(`<option disabled>Buffer Free voll (${BUFFER_MAX} geplant): Freigabe wartet, bis ein Post raus ist</option>`);
   document.querySelectorAll("#slotWahl, select.fslot").forEach(sel => { if (!sel.dataset.gefuellt) { sel.dataset.gefuellt = "1"; sel.insertAdjacentHTML("beforeend", opt.join("")); } });
 }
 // 25.11. abends: Posten auch aus „Fertig“ (schon geprüfte Clips standen nie in der Prüf-Schlange, also gab es dort keinen Posten-Knopf)
