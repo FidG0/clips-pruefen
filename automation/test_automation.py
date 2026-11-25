@@ -20,7 +20,7 @@ class Slots(unittest.TestCase):
         self.assertEqual((s.day, s.hour, s.minute), (24, 13, 0))
 
     def test_belegt_und_vorlauf(self):
-        jetzt = dt.datetime(2026, 11, 24, 18, 45, tzinfo=BER).astimezone(UTC)  # 19:00 nur 15 Min entfernt
+        jetzt = dt.datetime(2026, 11, 24, 18, 50, tzinfo=BER).astimezone(UTC)  # 19:00 nur 10 Min entfernt (Vorlauf 15)
         s = lib.naechster_slot(set(), jetzt).astimezone(BER)
         self.assertEqual((s.hour, s.minute), (20, 30))
         belegt = {s.astimezone(UTC).isoformat()}
@@ -56,7 +56,7 @@ class Plattformen(unittest.TestCase):
         self.assertIn("#shorts", t)
         self.assertIn("\n", t)
         m = lib.metadata_bauen(self.k, "youtube")["youtube"]
-        self.assertTrue(m["title"].endswith("#shorts"))
+        self.assertNotIn("#", m["title"])   # 25.11.: echter Titel, #shorts steht in der Beschreibung
         self.assertLessEqual(len(m["title"]), 100)
         self.assertEqual(m["categoryId"], "20")
         self.assertEqual((m["privacy"], m["madeForKids"], m["type"]), ("public", False, "short"))
@@ -194,7 +194,7 @@ class WunschSlots(unittest.TestCase):
         p = lambda t, b=(): lib.slot_pruefen(lib.slot_aus_lokal(t), set(b), self.jetzt)  # noqa: E731
         self.assertIsNone(p("2026-11-25T16:00"))
         self.assertIn("kein Posting-Slot", p("2026-11-25T17:00"))
-        knapp = dt.datetime(2026, 11, 25, 14, 45, tzinfo=self.UTC)   # 15:45 Berlin, 16:00 nur 15 Min weg
+        knapp = dt.datetime(2026, 11, 25, 14, 50, tzinfo=self.UTC)   # 15:50 Berlin, 16:00 nur 10 Min weg
         self.assertIn("vorbei", lib.slot_pruefen(lib.slot_aus_lokal("2026-11-25T16:00"), set(), knapp))
         self.assertIn("belegt", p("2026-11-25T19:00", ["2026-11-25T18:00:00+00:00"]))
         voll = ["2026-11-26T15:00:00+00:00", "2026-11-26T18:00:00+00:00", "2026-11-26T19:30:00+00:00"]
@@ -268,10 +268,12 @@ class WunschSlots(unittest.TestCase):
         t, grund = lib.sofort_slot([], "tiktok", j)
         self.assertIsNone(grund)
         self.assertEqual(t, j + dt.timedelta(minutes=5))
-        self.assertIn("Abstand", lib.sofort_slot([g("2026-11-25T13:30")], "tiktok", j)[1])
-        self.assertIn("schon einen Bonus", lib.sofort_slot([g("2026-11-25T22:00")], "tiktok", j)[1])
-        self.assertIn("schon einen Bonus", lib.sofort_slot([g("2026-11-25T10:00", bonus=True)], "tiktok", j)[1])
-        self.assertIsNone(lib.sofort_slot([g("2026-11-25T22:00")], "youtube", j)[1])
+        # 25.11. abends: nie mehr gesperrt, nur Warnungen
+        self.assertEqual(lib.sofort_slot([g("2026-11-25T13:30")], "tiktok", j), (j + dt.timedelta(minutes=5), None))
+        self.assertIn("Abstand", " ".join(lib.sofort_warnungen([g("2026-11-25T13:30")], "tiktok", j)))
+        self.assertIn("schon einen Bonus", " ".join(lib.sofort_warnungen([g("2026-11-25T22:00")], "tiktok", j)))
+        self.assertIn("schon einen Bonus", " ".join(lib.sofort_warnungen([g("2026-11-25T10:00", bonus=True)], "tiktok", j)))
+        self.assertEqual(lib.sofort_warnungen([g("2026-11-25T22:00")], "youtube", j), [])
         self.assertEqual(lib.wunsch_slots(lib.wunsch_kommentar({"tiktok": "sofort"})), {"tiktok": "sofort"})
 
     def test_sofort_im_job(self):
@@ -307,3 +309,213 @@ class Sperren(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- 25.11.: Titel, Beschreibung, Hashtags je Plattform
+BLOCK = ("Titel: Trymacs dachte, Verstümmelung ist ein Gaming-Begriff 💀\n\nBeschreibung:\nTrymacs liest in GTA 6 die Einstellungen, "
+         "erfährt was Verstümmelung bedeutet und lässt es trotzdem an 😂\n\n🎥 Trymacs auf Twitch (Fanpage, eigener Schnitt)\n"
+         "#trymacs #gta6 #gta")
+XQC = ("Titel: xQc's first car theft in GTA 6 goes WRONG 😭\n\nBeschreibung:\nxQc tries to steal a car in GTA 6 for the first time 😭\n"
+       "Who did it better on their first try? 👇\n\n#xqc #gta6 #gta #twitchclips\n\nYouTube Shorts: xQc's first car theft goes wrong 😭 #clipwreck #xqc")
+TRENDS = {"hashtags": [{"tag": "gta6", "gewicht": 500}, {"tag": "byalexz", "gewicht": 150}, {"tag": "gta6gameplay", "gewicht": 116},
+                       {"tag": "zarbex", "gewicht": 109}, {"tag": "streamingdeutschland", "gewicht": 105}, {"tag": "casino", "gewicht": 99},
+                       {"tag": "rohatclips", "gewicht": 56}],
+          "streamer": [{"name": "trymacs"}, {"name": "zarbex"}],
+          "top_clips": [{"kanal": "by.alexz"}, {"kanal": "rohatclips"}]}
+
+
+class Texte(unittest.TestCase):
+    def karten(self):
+        return [{"caption": BLOCK, "titel": "Trymacs dachte, Verstümmelung ist ein Gaming-Begriff 💀", "kanal": "fanpage", "art": "GTA"},
+                {"caption": XQC, "titel": "xQc's first car theft in GTA 6 goes WRONG 😭", "kanal": "fanpage"},
+                {"caption": "Er fährt einfach rein #gta6", "titel": "Zarbex crasht", "kanal": "Zarbex", "art": "GTA"}]
+
+    def test_kein_block_mehr_im_posttext(self):
+        for k in self.karten():
+            for p in ("tiktok", "youtube", "instagram"):
+                t = lib.texte_bauen(k, p, trends=TRENDS)
+                text = lib.texte_text(t, p)
+                self.assertNotRegex(text.lower(), r"titel\s*:|beschreibung\s*:|youtube shorts\s*:")
+                self.assertIsNone(lib.texte_pruefen(t, p), (p, text))
+                if p == "tiktok":
+                    self.assertNotIn("\n", text)
+                    self.assertTrue(text.startswith(k["titel"]))
+                if p == "instagram":
+                    self.assertLessEqual(len(set(lib._tags_aus(text))), 5)
+                if p == "youtube":
+                    m = lib.metadata_bauen(k, p, teile=t)["youtube"]
+                    self.assertLessEqual(len(m["title"]), 100)
+                    self.assertNotIn("#", m["title"])
+                    self.assertIn("#shorts", text)
+                    self.assertLessEqual(len(set(lib._tags_aus(text))), 3)
+
+    def test_quelle_als_eigener_satz(self):
+        t = lib.texte_bauen(self.karten()[0], "instagram")
+        self.assertIn("\n\n🎥 Trymacs auf Twitch (Fanpage, eigener Schnitt)", t["beschreibung"])
+        x = lib.texte_bauen(self.karten()[1], "tiktok")
+        self.assertIn("🎥 xQc (Fanpage, eigener Schnitt)", x["beschreibung"])
+
+    def test_youtube_titel_aus_shorts_zeile(self):
+        k = self.karten()[1]
+        self.assertEqual(lib.texte_bauen(k, "youtube")["titel"], "xQc's first car theft goes wrong 😭")
+        self.assertNotIn("YouTube", lib.texte_bauen(k, "instagram")["beschreibung"])
+        # eigener Titel von Marvin gilt auch auf YouTube
+        self.assertEqual(lib.texte_bauen({**k, "titel": "Mein Titel"}, "youtube", titel_gesetzt=True)["titel"], "Mein Titel")
+        # Karte hat später einen anderen Titel bekommen als der Block: der gilt
+        self.assertEqual(lib.texte_bauen({**k, "titel": "Neuer Titel"}, "youtube")["titel"], "Neuer Titel")
+
+    def test_trends_nur_passend(self):
+        k = self.karten()[0]
+        tags = lib.trend_tags(k, TRENDS)
+        self.assertNotIn("#byalexz", tags)        # fremde Kanal-Marke
+        self.assertNotIn("#rohatclips", tags)
+        self.assertNotIn("#zarbex", tags)         # anderer Streamer, nicht im Clip
+        self.assertNotIn("#casino", tags)         # Glücksspiel nie
+        self.assertIn("#gta6gameplay", lib.trend_tags(k, TRENDS, ohne={"#gta6"}))
+        self.assertEqual(lib.trend_tags(k, None), [])
+
+    def test_gluecksspiel_im_bearbeiteten_text_sperrt(self):
+        self.assertIn("Glücksspiel", lib.texte_pruefen({"titel": "x", "beschreibung": "Ab ins Casino", "hashtags": []}, "tiktok"))
+        self.assertIn("Glücksspiel", lib.texte_pruefen({"titel": "x", "beschreibung": "y", "hashtags": ["#roulette"]}, "tiktok"))
+        self.assertIn("Titel:", lib.texte_pruefen({"titel": "x", "beschreibung": "Titel: y", "hashtags": []}, "tiktok"))
+        self.assertIn("höchstens 5", lib.texte_pruefen({"titel": "x", "beschreibung": "y", "hashtags": [f"#t{i}" for i in range(6)]}, "instagram"))
+
+    def test_kommentar_hin_und_zurueck(self):
+        texte = {"tiktok": {"titel": "Hook 💀", "beschreibung": "Satz.\n\n🎥 Quelle", "hashtags": ["#a", "b"]}}
+        k = "[posten] slot:tiktok=sofort " + lib.texte_kommentar(texte)
+        back = lib.texte_aus_kommentar(k)
+        self.assertEqual(back["tiktok"]["titel"], "Hook 💀")
+        self.assertEqual(back["tiktok"]["hashtags"], ["#a", "#b"])
+        self.assertEqual(lib.wunsch_slots(k), {"tiktok": "sofort"})
+        self.assertEqual(lib.ohne_texte(k), "[posten] slot:tiktok=sofort")
+        self.assertEqual(lib.texte_aus_kommentar("[posten] texte:kaputt!!"), {})
+
+
+class TexteImJob(unittest.TestCase):
+    def test_bearbeiteter_text_wird_gepostet(self):
+        t = {p: {"titel": "Mein Hook 💀", "beschreibung": "Mein Satz.", "hashtags": ["#zarbex"]} for p in ("tiktok", "youtube", "instagram")}
+        z = WunschSlots()._lauf("[posten] " + lib.texte_kommentar(t))
+        tik = next(e for e in z if e["plattform"] == "tiktok")
+        self.assertEqual(tik["text"], "Mein Hook 💀 Mein Satz. #zarbex")
+        yt = next(e for e in z if e["plattform"] == "youtube")
+        self.assertEqual(yt["metadata"]["youtube"]["title"], "Mein Hook 💀")
+
+    def test_gluecksspiel_im_bearbeiteten_text_bleibt_gesperrt(self):
+        t = {"tiktok": {"titel": "Hook", "beschreibung": "Ab ins Casino", "hashtags": []}}
+        self.assertEqual(WunschSlots()._lauf("[posten] " + lib.texte_kommentar(t)), [])
+
+    def test_korrektur_nur_mit_freigabe_und_nie_gesendete(self):
+        import posten
+        jetzt = dt.datetime(2026, 11, 25, 20, 0, tzinfo=dt.timezone.utc)
+        alt = "Titel: Trymacs dachte 💀 Beschreibung: Trymacs liest #trymacs"
+        geplant = [{"auftrag_id": 5, "plattform": "tiktok", "status": "geplant", "buffer_id": "b1", "text": alt,
+                    "slot_utc": "2026-11-25T21:00:00+00:00"},
+                   {"auftrag_id": 5, "plattform": "instagram", "status": "geplant", "buffer_id": "b2", "text": alt,
+                    "slot_utc": "2026-11-25T21:00:00+00:00"},
+                   {"auftrag_id": 5, "plattform": "youtube", "status": "geplant", "buffer_id": "b3", "text": "sauber",
+                    "slot_utc": "2026-11-25T21:00:00+00:00"}]
+
+        class Sb:
+            def __init__(self, info):
+                self.info, self.geschrieben = info, {}
+
+            def info_lesen(self, k, d=None):
+                return self.info
+
+            def info_schreiben(self, k, w):
+                self.geschrieben[k] = w
+
+            def holen(self, t, q):
+                return [{"id": 5, "karte_id": "k5", "kommentar": "[posten]", "titel": None,
+                         "karten": {"caption": BLOCK, "titel": "Trymacs dachte, Verstümmelung ist ein Gaming-Begriff 💀"}}]
+
+        class Buf:
+            bearbeitet = []
+
+            def gesendete_posts(self, org, ids, max_seiten=10):
+                return [{"id": "b2"}]
+
+            def post_bearbeiten(self, i, text, meta):
+                Buf.bearbeitet.append((i, text))
+
+        z = {"geplant": [dict(g) for g in geplant]}
+        sb = Sb({})
+        posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, True, None, jetzt)
+        self.assertEqual(Buf.bearbeitet, [])                       # ohne Freigabe nichts
+        self.assertEqual(len(sb.geschrieben["texte_korrektur"]["vorschau"]), 2)
+        sb = Sb({"freigabe": True})
+        posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, True, None, jetzt)
+        self.assertEqual([i for i, _ in Buf.bearbeitet], ["b1"])     # b2 ist schon gesendet, b3 schon sauber
+        self.assertNotIn("Titel:", Buf.bearbeitet[0][1])
+        erg = {e["buffer_id"]: e["status"] for e in sb.geschrieben["texte_korrektur"]["ergebnis"]}
+        self.assertEqual(erg, {"b1": "korrigiert", "b2": "schon veröffentlicht, nicht angefasst"})
+        self.assertFalse(sb.geschrieben["texte_korrektur"]["freigabe"])
+        self.assertEqual(z["geplant"][1]["status"], "gesendet")
+        Buf.bearbeitet = []
+        sb = Sb({"freigabe": True})
+        posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, False, None, jetzt)
+        self.assertEqual(Buf.bearbeitet, [])                       # Probelauf ändert nie etwas
+
+
+class YoutubeGrenze(unittest.TestCase):
+    def test_youtube_max_zwei_pro_tag(self):
+        jetzt = dt.datetime(2026, 11, 26, 8, 0, tzinfo=BER).astimezone(UTC)
+        zwei = {lib.slot_aus_lokal("2026-11-26T13:00").isoformat(), lib.slot_aus_lokal("2026-11-26T16:00").isoformat()}
+        self.assertEqual(lib.naechster_slot(zwei, jetzt, plattform="youtube").astimezone(BER).day, 27)
+        self.assertEqual(lib.naechster_slot(zwei, jetzt, plattform="tiktok").astimezone(BER).hour, 19)
+        self.assertIn("2 Posts", lib.slot_pruefen(lib.slot_aus_lokal("2026-11-26T19:00"), zwei, jetzt, plattform="youtube"))
+        self.assertIsNone(lib.slot_pruefen(lib.slot_aus_lokal("2026-11-26T19:00"), zwei, jetzt, plattform="tiktok"))
+
+
+class Abgleich(unittest.TestCase):
+    def test_geloeschte_werden_frei_und_kein_doppelpost(self):
+        import posten
+
+        class Buf:
+            def post_ids(self, org, ids, status, max_seiten=4):
+                return {"b2"} if "sent" in status else {"b3"}
+
+        z = {"geplant": [{"karte_id": "k", "plattform": "tiktok", "status": "geplant", "buffer_id": "b1"},
+                         {"karte_id": "k", "plattform": "youtube", "status": "geplant", "buffer_id": "b2"},
+                         {"karte_id": "k", "plattform": "instagram", "status": "geplant", "buffer_id": "b3"}]}
+        posten.buffer_abgleich(z, Buf(), "o", {"tiktok": {"id": "c"}})
+        self.assertEqual([g["status"] for g in z["geplant"]], ["geloescht", "gesendet", "geplant"])
+        # Instagram ist noch geplant: neue Freigabe der Karte postet nur TikTok und YouTube
+        r = WunschSlots()._lauf("[posten]", geplant=[{"karte_id": "k9", "plattform": "instagram", "status": "geplant",
+                                                      "slot_utc": "2030-01-01T12:00:00+00:00"}])
+        self.assertEqual(sorted(e["plattform"] for e in r), ["tiktok", "youtube"])
+
+
+class Stopp(unittest.TestCase):
+    def test_alte_freigaben_ungueltig_und_geplante_geloescht(self):
+        import posten
+        jetzt = dt.datetime(2026, 11, 25, 20, 40, tzinfo=dt.timezone.utc)
+
+        class Sb:
+            geschrieben = {}
+
+            def info_lesen(self, k, d=None):
+                return {"bis_auftrag": 5}
+
+            def info_schreiben(self, k, w):
+                Sb.geschrieben[k] = w
+
+        class Buf:
+            weg = []
+
+            def post_loeschen(self, i):
+                Buf.weg.append(i)
+
+        z = {"erledigte_auftraege": [], "geplant": [
+            {"auftrag_id": 5, "plattform": "tiktok", "status": "geplant", "buffer_id": "b1"},
+            {"auftrag_id": 1, "plattform": "tiktok", "status": "gesendet", "buffer_id": "b0"},
+            {"auftrag_id": 9, "plattform": "tiktok", "status": "geplant", "buffer_id": "b9"}]}
+        offen = posten.stopp_anwenden(Sb(), z, Buf(), True, [{"id": 4}, {"id": 6}], jetzt)
+        self.assertEqual([a["id"] for a in offen], [6])          # nur neue Bestätigungen zählen
+        self.assertEqual(z["erledigte_auftraege"], [4])
+        self.assertEqual(Buf.weg, ["b1"])                        # gesendet und neue nie
+        self.assertEqual([g["status"] for g in z["geplant"]], ["storniert", "gesendet", "geplant"])
+        Buf.weg = []
+        posten.stopp_anwenden(Sb(), {"erledigte_auftraege": [], "geplant": [{"auftrag_id": 5, "status": "geplant", "buffer_id": "x"}]},
+                              Buf(), False, [], jetzt)
+        self.assertEqual(Buf.weg, [])                            # Probelauf löscht nie

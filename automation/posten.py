@@ -9,11 +9,13 @@ Freigabe = Auftrag mit aktion 'behalten' und Kommentar, der mit '[posten]' begin
 (so bleibt die bestehende PC-Verarbeitung von 'behalten' unverändert gültig).
 """
 import datetime as dt
+import re
 import urllib.parse
 from zoneinfo import ZoneInfo
 
-from lib import (CONFIG, Buffer, Supabase, buffer_voll, caption_bauen, ist_bonus, sofort_slot, format_von, live, metadata_bauen,
-                 naechster_slot, slot_pruefen, sperrgrund, titel_typ, wunsch_slots)
+from lib import (CONFIG, Buffer, Supabase, buffer_voll, ist_bonus, sofort_slot, sofort_warnungen, format_von, live, metadata_bauen,
+                 naechster_slot, slot_pruefen, sperrgrund, texte_aus_kommentar, texte_bauen, texte_pruefen, texte_text, titel_typ,
+                 wunsch_slots)
 
 STANDARD = {"erledigte_auftraege": [], "geplant": [], "probelauf": [], "gesperrt": [], "letzter_lauf": None}
 
@@ -30,6 +32,172 @@ def offene_freigaben(sb, erledigt):
         "order": "id.asc",
     })
     return [a for a in sb.holen("auftraege", q) if a["id"] not in erledigt]
+
+
+def texte_fuer(auftrag, karte, plattform, trends):
+    """Marvins Text aus der Vorschau (texte: im Kommentar) oder der Vorschlag. Dazu der Sperrgrund oder None.
+    Marvins Text wird voll geprüft. Beim Vorschlag sperrt nur Glücksspiel (neue Sperre auf den fertigen Text),
+    kleinere Mängel (z. B. leerer YouTube-Titel) laufen wie bisher mit Ersatz („Clip“) durch."""
+    eigen = texte_aus_kommentar(auftrag.get("kommentar")).get(plattform)
+    teile = eigen or texte_bauen(karte, plattform, trends=trends, titel_gesetzt=bool(auftrag.get("titel")))
+    grund = texte_pruefen(teile, plattform)
+    if grund and not eigen and "Glücksspiel" not in grund:
+        grund = None
+    return teile, grund
+
+
+def vorschlaege_schreiben(sb, trends, plattformen):
+    """info.texte_vorschlag: Titel, Beschreibung, Hashtags je postbarer Karte und Plattform für die Vorschau
+    auf Handy und PC (dieselbe Logik wie beim Posten, Trends inklusive)."""
+    q = urllib.parse.urlencode({"select": "id,titel,caption,kanal,art,status,datei", "datei": "not.is.null", "order": "aktualisiert.desc",
+                                "limit": "80"})
+    karten = sb.holen("karten", q)
+    aus = {}
+    for k in karten:
+        if k.get("status") == "abgelehnt":
+            continue
+        aus[k["id"]] = {}
+        for pf in plattformen:
+            t = texte_bauen(k, pf, trends=trends)
+            aus[k["id"]][pf] = {**t, "text": texte_text(t, pf), "sperre": texte_pruefen(t, pf)}
+    sb.info_schreiben("texte_vorschlag", {"stand": dt.datetime.now(dt.timezone.utc).isoformat(), "karten": aus,
+                                          "trends_stand": (trends or {}).get("stand")})
+
+
+def alter_text(g):
+    t = str(g.get("text") or "")
+    return bool(re.search(r"(?i)(^|\s)(titel|beschreibung)\s*:", t) or re.search(r"(?i)youtube shorts\s*:", t))
+
+
+def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt):
+    """25.11. (Marvins Ja nötig): geplante Posts mit dem alten Block-Text in Buffer per editPost auf saubere Texte setzen.
+    Läuft nur, wenn info.texte_korrektur.freigabe true ist. Vorher wird Buffer gefragt, welche Posts schon gesendet sind:
+    die bleiben unberührt und werden nur gemeldet. Ohne Freigabe oder im Probelauf: nur Vorschau."""
+    auftrag = sb.info_lesen("texte_korrektur", {}) or {}
+    kandidaten = []
+    for g in zustand["geplant"]:
+        if g.get("status") != "geplant" or not g.get("buffer_id") or not alter_text(g):
+            continue
+        try:
+            slot = dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            continue
+        kandidaten.append((slot, g))
+    if not kandidaten and not auftrag.get("freigabe"):
+        return
+    ids = sorted({g["auftrag_id"] for _, g in kandidaten})
+    freig = {}
+    if ids:
+        q = urllib.parse.urlencode({"select": "id,karte_id,kommentar,titel,karten(*)", "id": f"in.({','.join(map(str, ids))})"})
+        freig = {a["id"]: a for a in sb.holen("auftraege", q)}
+    gesendet = set()
+    darf = bool(auftrag.get("freigabe")) and ist_live and buf is not None
+    if darf:
+        gesendet = {x["id"] for x in buf.gesendete_posts(org_id, [k["id"] for k in kanaele.values()], max_seiten=4)}
+    vorschau, ergebnis = [], []
+    for slot, g in sorted(kandidaten, key=lambda x: x[0]):
+        a = freig.get(g["auftrag_id"])
+        if not a:
+            continue
+        k = {**(a.get("karten") or {})}
+        if a.get("titel"):
+            k["titel"] = a["titel"]
+        pf = g.get("plattform", "tiktok")
+        teile, sperre = texte_fuer(a, k, pf, trends)
+        neu, meta = texte_text(teile, pf), metadata_bauen(k, pf, teile=teile)
+        zeile = {"buffer_id": g["buffer_id"], "plattform": pf, "slot_lokal": g.get("slot_lokal"), "titel": teile.get("titel"),
+                 "alt": g.get("text"), "neu": neu, "meta": meta}
+        if g["buffer_id"] in gesendet:
+            zeile["status"] = "schon veröffentlicht, nicht angefasst"
+            g["status"] = "gesendet"
+        elif slot <= jetzt + dt.timedelta(minutes=3):
+            zeile["status"] = "zu knapp vor dem Senden, nicht angefasst"
+        elif sperre:
+            zeile["status"] = "gesperrt: " + sperre
+        elif darf:
+            try:
+                antwort = buf.post_bearbeiten(g["buffer_id"], neu, meta) or {}
+                g.update(text=neu, metadata=meta, teile=teile, titel=teile.get("titel"), hinweis="Text am 25.11. korrigiert.")
+                zeile["status"] = "korrigiert"
+                try:   # Buffer-Doku: dueAt weglassen = unverändert. Hier nachgeprüft statt geglaubt.
+                    neu_due = dt.datetime.fromisoformat(str(antwort.get("dueAt")).replace("Z", "+00:00"))
+                    if abs((neu_due - slot).total_seconds()) > 60:
+                        zeile["status"] = f"korrigiert, ABER Uhrzeit geändert auf {neu_due.isoformat()}"
+                        g["hinweis"] = "Text korrigiert, Buffer meldet neue Uhrzeit: bitte in Buffer prüfen."
+                except (TypeError, ValueError):
+                    pass
+            except Exception as fehler:   # bleibt alt, nächster Lauf versucht es nochmal
+                zeile["status"] = "Fehler: " + str(fehler)[:200]
+        else:
+            zeile["status"] = "Vorschau (wartet auf Freigabe)"
+        (ergebnis if darf else vorschau).append(zeile)
+        print(f"korrektur {pf:9} {zeile['status']}  {g.get('slot_lokal')}  {teile.get('titel')}")
+    if darf:
+        fertig = all(not z["status"].startswith("Fehler") for z in ergebnis)
+        sb.info_schreiben("texte_korrektur", {**auftrag, "freigabe": not fertig, "ergebnis": ergebnis,
+                                              "gelaufen": jetzt.isoformat()})
+    else:
+        sb.info_schreiben("texte_korrektur", {**auftrag, "vorschau": vorschau, "geprueft": jetzt.isoformat()})
+
+
+def buffer_abgleich(zustand, buf, org_id, kanaele):
+    """25.11. (Marvin hat Posts in Buffer gelöscht): Einträge, die Buffer nicht mehr kennt, werden „geloescht“.
+    Sonst blockieren sie Slots und die Buffer-Grenze, und neu einplanen ginge nicht. Gesendete bleiben gesendet."""
+    ids = [k["id"] for k in kanaele.values()]
+    da = buf.post_ids(org_id, ids, ["scheduled", "sending", "error", "needs_approval", "draft"])
+    gesendet = buf.post_ids(org_id, ids, ["sent"], max_seiten=6)
+    for g in zustand["geplant"]:
+        if g.get("status") != "geplant" or not g.get("buffer_id"):
+            continue
+        if g["buffer_id"] in gesendet:
+            g["status"] = "gesendet"
+        elif g["buffer_id"] not in da:
+            g.update(status="geloescht", hinweis="In Buffer gelöscht (25.11.), Slot ist wieder frei.")
+            print(f"geloescht {g.get('plattform')} {g.get('slot_lokal')}  {g.get('titel')}")
+
+
+def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt):
+    """25.11. 21:35 (Marvin: „lösche die sachen so lange aus dem kalender und buffer, bis ich sie bestätigt habe“):
+    info.posten_stopp = {"bis_auftrag": N}. Freigaben mit ID <= N gelten nicht mehr (nur ein neuer Klick zählt),
+    ihre noch geplanten Buffer-Posts werden gelöscht. Veröffentlichte Posts fasst das nie an. Gibt die gültigen offenen zurück."""
+    stopp = sb.info_lesen("posten_stopp", {}) or {}
+    bis = int(stopp.get("bis_auftrag") or 0)
+    if not bis:
+        return offen
+    alt = [a for a in offen if a["id"] <= bis]
+    for a in alt:
+        print(f"ungültig  Freigabe {a['id']} (vor dem Stopp, braucht neue Bestätigung)")
+        if ist_live:
+            zustand["erledigte_auftraege"].append(a["id"])
+    ergebnis = []
+    for g in zustand["geplant"]:
+        # loeschen_offen: am 25.11. schon in der Anzeige storniert (Seite sollte sofort leer sein), Buffer-Löschung steht noch aus
+        if (g.get("auftrag_id") or 0) > bis or not (g.get("status") == "geplant" or g.get("loeschen_offen")):
+            continue
+        zeile = {"buffer_id": g.get("buffer_id"), "plattform": g.get("plattform"), "slot_lokal": g.get("slot_lokal"), "titel": g.get("titel")}
+        if not ist_live or buf is None:
+            zeile["status"] = "würde gelöscht (Probelauf)"
+        elif not g.get("buffer_id"):
+            g.update(status="storniert", hinweis="Stopp 25.11.: wartet auf neue Bestätigung.")
+            zeile["status"] = "storniert"
+        else:
+            try:
+                buf.post_loeschen(g["buffer_id"])
+                g.update(status="storniert", hinweis="Stopp 25.11.: in Buffer gelöscht, wartet auf neue Bestätigung.")
+                g.pop("loeschen_offen", None)
+                zeile["status"] = "in Buffer gelöscht"
+            except Exception as fehler:   # meist schon von Marvin gelöscht (nicht gefunden): dann ist er weg
+                if "not" in str(fehler).lower() and "found" in str(fehler).lower():
+                    g.update(status="storniert", hinweis="Stopp 25.11.: war in Buffer schon gelöscht.")
+                    g.pop("loeschen_offen", None)
+                    zeile["status"] = "war schon gelöscht"
+                else:
+                    zeile["status"] = "Fehler: " + str(fehler)[:160]
+        ergebnis.append(zeile)
+        print(f"stopp     {g.get('plattform')} {g.get('slot_lokal')} {zeile['status']}  {g.get('titel')}")
+    if ergebnis:
+        sb.info_schreiben("posten_stopp", {**stopp, "ergebnis": ergebnis, "gelaufen": jetzt.isoformat()})
+    return [a for a in offen if a["id"] > bis]
 
 
 def videodatei(karte):
@@ -66,18 +234,22 @@ def main():
     offen = offene_freigaben(sb, erledigt)
     ist_live = live()
     plattformen = aktive_plattformen()
-    kanaele = {}
+    kanaele, org_id, buf = {}, None, None
     jetzt = dt.datetime.now(dt.timezone.utc)
+    trends = sb.info_lesen("trends", None)   # vom PC (cloud_sync aus lernen/trends.json), fehlt er: nur config-Hashtags
     bstand = zustand.get("buffer") or {}
     try:
         alter = (jetzt - dt.datetime.fromisoformat(bstand["geprueft"])).total_seconds()
     except (KeyError, TypeError, ValueError):
         alter = 1e9
     # Verbindungs-Status für die Kanäle-Seite der Zentrale: bei jeder Freigabe, sonst höchstens stündlich
-    if ist_live and (offen or alter > 3600):
+    korrektur = (sb.info_lesen("texte_korrektur", {}) or {}).get("freigabe")
+    stopp_offen = any((g.get("status") == "geplant" or g.get("loeschen_offen")) and (g.get("auftrag_id") or 0) <= int((sb.info_lesen("posten_stopp", {}) or {}).get("bis_auftrag") or 0)
+                      for g in zustand["geplant"])
+    if ist_live and (offen or alter > 3600 or korrektur or stopp_offen):
         try:
             buf = Buffer()
-            _, kanaele = buf.kanaele(CONFIG["buffer_kanal_name"])
+            org_id, kanaele = buf.kanaele(CONFIG["buffer_kanal_name"])
             zustand["buffer"] = {"geprueft": jetzt.isoformat(), "fehler": None,
                                  "kanaele": {p: (k.get("displayName") or k.get("name")) for p, k in kanaele.items()}}
         except Exception as fehler:
@@ -85,6 +257,14 @@ def main():
             if offen:   # wie bisher: Freigaben bleiben offen und werden im nächsten Lauf neu versucht
                 sb.info_schreiben("posting", zustand)
                 raise
+
+    if ist_live and buf is not None and kanaele and org_id:
+        try:
+            buffer_abgleich(zustand, buf, org_id, kanaele)
+        except Exception as fehler:   # Abgleich ist Hilfe, kein Muss
+            print(f"Buffer-Abgleich nicht gelaufen: {fehler}")
+
+    offen = stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt)
 
     belegt = {p: belegte_slots(zustand["geplant"], p) for p in plattformen}
     probe, gesperrt = [], []
@@ -101,6 +281,24 @@ def main():
         link = None
         wunsch = wunsch_slots(a.get("kommentar"))   # Kalender: nur gewählte Plattformen, je im gewählten Slot
         ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
+        # 25.11.: kein Doppelpost. Ist die Karte auf einer Plattform noch geplant, entfällt diese Plattform.
+        doppelt = [p for p in ziel if any(g.get("karte_id") == a["karte_id"] and g.get("plattform", "tiktok") == p
+                                          and g.get("status") == "geplant" for g in zustand["geplant"] + probe)]
+        ziel = [p for p in ziel if p not in doppelt]
+        if doppelt:
+            print(f"doppelt   {k.get('titel')}: schon geplant auf {', '.join(doppelt)}")
+        if not ziel:
+            gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"),
+                             "grund": "Schon auf allen Plattformen geplant, kein Doppelpost."})
+            if ist_live:
+                zustand["erledigte_auftraege"].append(a["id"])
+            continue
+        texte = {p: texte_fuer(a, k, p, trends) for p in ziel}
+        sperre_text = next((f"{p}: {g}" for p, (_, g) in texte.items() if g), None)
+        if sperre_text:   # z. B. Glücksspiel-Wort in Marvins geändertem Text: bleibt offen, wird nie so gepostet
+            gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"), "grund": "Text " + sperre_text})
+            print(f"gesperrt  {k.get('titel')}: Text {sperre_text}")
+            continue
         voll = [g for g in (buffer_voll(zustand["geplant"], p) for p in ziel) if g]
         if voll:   # Buffer Free: max. 10 geplante je Kanal. Freigabe bleibt offen, nächster Lauf versucht es wieder.
             gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"), "grund": voll[0]})
@@ -108,23 +306,25 @@ def main():
             continue
         slots, hinweise = {}, {}
         for p in ziel:
-            if wunsch.get(p) == "sofort":   # Bonus jetzt: in wenigen Minuten, sonst nächster regulärer Slot
-                t, grund_slot = sofort_slot(zustand["geplant"] + probe, p)
-                slots[p] = t or naechster_slot(belegt[p])
-                if grund_slot:
-                    hinweise[p] = "Bonus jetzt ging nicht (" + grund_slot + "), nächster freier Slot genommen."
+            if wunsch.get(p) == "sofort":   # Bonus jetzt: geht immer in wenigen Minuten raus (25.11. abends, Marvin)
+                warn = sofort_warnungen(zustand["geplant"] + probe, p)
+                slots[p] = sofort_slot(zustand["geplant"] + probe, p)[0]
+                if warn:
+                    hinweise[p] = "Bonus trotz Hinweis gepostet: " + " ".join(warn)
                 continue
-            grund_slot = slot_pruefen(wunsch[p], belegt[p]) if p in wunsch else None
-            slots[p] = wunsch[p] if p in wunsch and grund_slot is None else naechster_slot(belegt[p])
+            grund_slot = slot_pruefen(wunsch[p], belegt[p], plattform=p) if p in wunsch else None
+            slots[p] = wunsch[p] if p in wunsch and grund_slot is None else naechster_slot(belegt[p], plattform=p)
             if grund_slot:
                 hinweise[p] = "Wunsch-Slot ging nicht (" + grund_slot + "), nächster freier genommen."
         for p in ziel:
             slot = slots[p]
-            text, meta = caption_bauen(k, plattform=p), metadata_bauen(k, p)
+            teile = texte[p][0]
+            text, meta = texte_text(teile, p), metadata_bauen(k, p, teile=teile)
             e = eintrag(a, p, slot, text, meta)
+            e["teile"] = teile
             if p in wunsch:
                 e["wunsch"] = True
-            if (wunsch.get(p) == "sofort" and not hinweise.get(p)) or ist_bonus(slot):
+            if wunsch.get(p) == "sofort" or ist_bonus(slot):
                 e["bonus"] = True
             if hinweise.get(p):
                 e["hinweis"] = hinweise[p]
@@ -151,6 +351,15 @@ def main():
             print(f"{p:9} {e['status']:9} {e['slot_lokal']}  {e['titel']}")
         if ist_live:
             zustand["erledigte_auftraege"].append(a["id"])
+
+    try:
+        texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt)
+    except Exception as fehler:   # Korrektur darf das normale Posten nie blockieren
+        print(f"Korrektur nicht gelaufen: {fehler}")
+    try:
+        vorschlaege_schreiben(sb, trends, plattformen)
+    except Exception as fehler:
+        print(f"Vorschläge nicht geschrieben: {fehler}")
 
     zustand["probelauf"] = probe
     zustand["gesperrt"] = gesperrt
