@@ -20,7 +20,7 @@ class Slots(unittest.TestCase):
         self.assertEqual((s.day, s.hour, s.minute), (24, 13, 0))
 
     def test_belegt_und_vorlauf(self):
-        jetzt = dt.datetime(2026, 11, 24, 18, 45, tzinfo=BER).astimezone(UTC)  # 19:00 nur 15 Min entfernt
+        jetzt = dt.datetime(2026, 11, 24, 18, 50, tzinfo=BER).astimezone(UTC)  # 19:00 nur 10 Min entfernt (Vorlauf 15)
         s = lib.naechster_slot(set(), jetzt).astimezone(BER)
         self.assertEqual((s.hour, s.minute), (20, 30))
         belegt = {s.astimezone(UTC).isoformat()}
@@ -194,7 +194,7 @@ class WunschSlots(unittest.TestCase):
         p = lambda t, b=(): lib.slot_pruefen(lib.slot_aus_lokal(t), set(b), self.jetzt)  # noqa: E731
         self.assertIsNone(p("2026-11-25T16:00"))
         self.assertIn("kein Posting-Slot", p("2026-11-25T17:00"))
-        knapp = dt.datetime(2026, 11, 25, 14, 45, tzinfo=self.UTC)   # 15:45 Berlin, 16:00 nur 15 Min weg
+        knapp = dt.datetime(2026, 11, 25, 14, 50, tzinfo=self.UTC)   # 15:50 Berlin, 16:00 nur 10 Min weg
         self.assertIn("vorbei", lib.slot_pruefen(lib.slot_aus_lokal("2026-11-25T16:00"), set(), knapp))
         self.assertIn("belegt", p("2026-11-25T19:00", ["2026-11-25T18:00:00+00:00"]))
         voll = ["2026-11-26T15:00:00+00:00", "2026-11-26T18:00:00+00:00", "2026-11-26T19:30:00+00:00"]
@@ -455,3 +455,32 @@ class TexteImJob(unittest.TestCase):
         sb = Sb({"freigabe": True})
         posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, False, None, jetzt)
         self.assertEqual(Buf.bearbeitet, [])                       # Probelauf ändert nie etwas
+
+
+class YoutubeGrenze(unittest.TestCase):
+    def test_youtube_max_zwei_pro_tag(self):
+        jetzt = dt.datetime(2026, 11, 26, 8, 0, tzinfo=BER).astimezone(UTC)
+        zwei = {lib.slot_aus_lokal("2026-11-26T13:00").isoformat(), lib.slot_aus_lokal("2026-11-26T16:00").isoformat()}
+        self.assertEqual(lib.naechster_slot(zwei, jetzt, plattform="youtube").astimezone(BER).day, 27)
+        self.assertEqual(lib.naechster_slot(zwei, jetzt, plattform="tiktok").astimezone(BER).hour, 19)
+        self.assertIn("2 Posts", lib.slot_pruefen(lib.slot_aus_lokal("2026-11-26T19:00"), zwei, jetzt, plattform="youtube"))
+        self.assertIsNone(lib.slot_pruefen(lib.slot_aus_lokal("2026-11-26T19:00"), zwei, jetzt, plattform="tiktok"))
+
+
+class Abgleich(unittest.TestCase):
+    def test_geloeschte_werden_frei_und_kein_doppelpost(self):
+        import posten
+
+        class Buf:
+            def post_ids(self, org, ids, status, max_seiten=4):
+                return {"b2"} if "sent" in status else {"b3"}
+
+        z = {"geplant": [{"karte_id": "k", "plattform": "tiktok", "status": "geplant", "buffer_id": "b1"},
+                         {"karte_id": "k", "plattform": "youtube", "status": "geplant", "buffer_id": "b2"},
+                         {"karte_id": "k", "plattform": "instagram", "status": "geplant", "buffer_id": "b3"}]}
+        posten.buffer_abgleich(z, Buf(), "o", {"tiktok": {"id": "c"}})
+        self.assertEqual([g["status"] for g in z["geplant"]], ["geloescht", "gesendet", "geplant"])
+        # Instagram ist noch geplant: neue Freigabe der Karte postet nur TikTok und YouTube
+        r = WunschSlots()._lauf("[posten]", geplant=[{"karte_id": "k9", "plattform": "instagram", "status": "geplant",
+                                                      "slot_utc": "2030-01-01T12:00:00+00:00"}])
+        self.assertEqual(sorted(e["plattform"] for e in r), ["tiktok", "youtube"])

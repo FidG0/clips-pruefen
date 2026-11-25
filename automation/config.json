@@ -11,7 +11,7 @@
     "22:00"
   ],
   "buffer_max_geplant": 10,
-  "mindest_vorlauf_minuten": 30,
+  "mindest_vorlauf_minuten": 15,
   "max_posts_pro_tag": 5,
   "buffer_kanal_name": "clipwreck",
   "marker": "[posten]",
@@ -103,7 +103,8 @@
       "kategorie_nach_format": {
         "GTA": "20"
       },
-      "max_hashtags_hart": 15
+      "max_hashtags_hart": 15,
+      "max_posts_pro_tag": 2
     },
     "instagram": {
       "aktiv": true,

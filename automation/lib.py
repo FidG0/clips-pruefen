@@ -139,6 +139,21 @@ class Buffer:
             raise RuntimeError(f"Buffer ändert nicht: {r.get('message') or r.get('__typename')}")
         return r["post"]
 
+    def post_ids(self, org_id, kanal_ids, status, max_seiten=4):
+        """25.11.: IDs aller Posts mit diesen Status (z. B. scheduled, sending, sent, error) in den Kanälen."""
+        q = """query($a: String) {
+                 posts(first: 50, after: $a, input: {organizationId: %s, filter: {status: %s, channelIds: %s}}) {
+                   edges { node { id } } pageInfo { endCursor hasNextPage } } }""" % (
+            json.dumps(org_id), "[" + ", ".join(status) + "]", json.dumps(list(kanal_ids)))
+        ids, nach = set(), None
+        for _ in range(max_seiten):
+            d = self.gql(q, {"a": nach})["posts"]
+            ids |= {e["node"]["id"] for e in d["edges"]}
+            if not d["pageInfo"]["hasNextPage"]:
+                break
+            nach = d["pageInfo"]["endCursor"]
+        return ids
+
     def gesendete_posts(self, org_id, kanal_ids, max_seiten=10):
         q = """query($a: String) {
                  posts(first: 50, after: $a, input: {organizationId: %s, filter: {status: [sent], channelIds: %s}}) {
@@ -155,7 +170,12 @@ class Buffer:
 
 
 # ---------------------------------------------------------------- Slots
-def naechster_slot(belegt_utc, jetzt_utc=None, cfg=CONFIG):
+def tagesgrenze(plattform, cfg=CONFIG):
+    """25.11.: Buffer plant bei YouTube nur 2 Posts pro Tag („maximum number of posts YouTube allows in a day (2)“)."""
+    return cfg.get("plattformen", {}).get(plattform or "", {}).get("max_posts_pro_tag", cfg["max_posts_pro_tag"])
+
+
+def naechster_slot(belegt_utc, jetzt_utc=None, cfg=CONFIG, plattform=None):
     """Nächster freier Slot (Slots aus config.json ohne Bonus-Slots, Berlin), der mind. X Min in der Zukunft liegt.
 
     belegt_utc: Menge von ISO-Strings (UTC) bereits geplanter Posts.
@@ -170,7 +190,7 @@ def naechster_slot(belegt_utc, jetzt_utc=None, cfg=CONFIG):
         for s in cfg["slots"]:
             if s in cfg.get("bonus_slots", []):   # Bonus-Slot nur, wenn Marvin ihn ausdrücklich wählt
                 continue
-            if pro_tag >= cfg["max_posts_pro_tag"]:
+            if pro_tag >= tagesgrenze(plattform, cfg):
                 break
             h, m = map(int, s.split(":"))
             kandidat = dt.datetime(datum.year, datum.month, datum.day, h, m, tzinfo=tz)
@@ -248,8 +268,9 @@ def sofort_warnungen(geplant, plattform, jetzt_utc=None, cfg=CONFIG):
                    "Kurz hintereinander teilen sich die Posts die Reichweite.")
     if any(g.get("bonus") or ist_bonus(s, cfg) for s, g in heute):
         aus.append("Heute gibt es schon einen Bonus-Clip.")
-    if len(heute) >= cfg["max_posts_pro_tag"]:
-        aus.append(f"Heute sind schon {len(heute)} Posts geplant oder gesendet (sonst max. {cfg['max_posts_pro_tag']}).")
+    if len(heute) >= tagesgrenze(plattform, cfg):
+        aus.append(f"Heute sind schon {len(heute)} Posts auf {plattform} geplant oder gesendet (sonst max. {tagesgrenze(plattform, cfg)})."
+                   + (" Buffer lehnt bei YouTube mehr als 2 pro Tag ab." if plattform == "youtube" else ""))
     return aus
 
 
@@ -273,7 +294,7 @@ def buffer_voll(geplant, plattform, jetzt_utc=None, cfg=CONFIG):
     return None
 
 
-def slot_pruefen(slot_utc, belegt_utc, jetzt_utc=None, cfg=CONFIG):
+def slot_pruefen(slot_utc, belegt_utc, jetzt_utc=None, cfg=CONFIG, plattform=None):
     """None = Slot ist erlaubt. Sonst der Grund. Gleiche Regeln wie naechster_slot:
     nur die festen Uhrzeiten, mindestens X Min Vorlauf, nicht schon belegt, höchstens N Posts pro Tag."""
     tz = ZoneInfo(cfg["zeitzone"])
@@ -286,8 +307,8 @@ def slot_pruefen(slot_utc, belegt_utc, jetzt_utc=None, cfg=CONFIG):
     belegt = {dt.datetime.fromisoformat(b.replace("Z", "+00:00")).astimezone(tz) for b in belegt_utc}
     if lokal in belegt:
         return f"Slot {lokal.strftime('%d.%m. %H:%M')} ist schon belegt."
-    if sum(1 for b in belegt if b.date() == lokal.date()) >= cfg["max_posts_pro_tag"]:
-        return f"Am {lokal.strftime('%d.%m.')} sind schon {cfg['max_posts_pro_tag']} Posts geplant."
+    if sum(1 for b in belegt if b.date() == lokal.date()) >= tagesgrenze(plattform, cfg):
+        return f"Am {lokal.strftime('%d.%m.')} sind schon {tagesgrenze(plattform, cfg)} Posts geplant (Grenze {plattform or 'je Plattform'})."
     return None
 
 

@@ -140,6 +140,22 @@ def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt
         sb.info_schreiben("texte_korrektur", {**auftrag, "vorschau": vorschau, "geprueft": jetzt.isoformat()})
 
 
+def buffer_abgleich(zustand, buf, org_id, kanaele):
+    """25.11. (Marvin hat Posts in Buffer gelöscht): Einträge, die Buffer nicht mehr kennt, werden „geloescht“.
+    Sonst blockieren sie Slots und die Buffer-Grenze, und neu einplanen ginge nicht. Gesendete bleiben gesendet."""
+    ids = [k["id"] for k in kanaele.values()]
+    da = buf.post_ids(org_id, ids, ["scheduled", "sending", "error", "needs_approval", "draft"])
+    gesendet = buf.post_ids(org_id, ids, ["sent"], max_seiten=6)
+    for g in zustand["geplant"]:
+        if g.get("status") != "geplant" or not g.get("buffer_id"):
+            continue
+        if g["buffer_id"] in gesendet:
+            g["status"] = "gesendet"
+        elif g["buffer_id"] not in da:
+            g.update(status="geloescht", hinweis="In Buffer gelöscht (25.11.), Slot ist wieder frei.")
+            print(f"geloescht {g.get('plattform')} {g.get('slot_lokal')}  {g.get('titel')}")
+
+
 def videodatei(karte):
     """(bucket, pfad): Original aus 'fertig' bevorzugt, sonst Vorschau."""
     if karte.get("datei"):
@@ -196,6 +212,12 @@ def main():
                 sb.info_schreiben("posting", zustand)
                 raise
 
+    if ist_live and buf is not None and kanaele and org_id:
+        try:
+            buffer_abgleich(zustand, buf, org_id, kanaele)
+        except Exception as fehler:   # Abgleich ist Hilfe, kein Muss
+            print(f"Buffer-Abgleich nicht gelaufen: {fehler}")
+
     belegt = {p: belegte_slots(zustand["geplant"], p) for p in plattformen}
     probe, gesperrt = [], []
     for a in offen:
@@ -211,6 +233,18 @@ def main():
         link = None
         wunsch = wunsch_slots(a.get("kommentar"))   # Kalender: nur gewählte Plattformen, je im gewählten Slot
         ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
+        # 25.11.: kein Doppelpost. Ist die Karte auf einer Plattform noch geplant, entfällt diese Plattform.
+        doppelt = [p for p in ziel if any(g.get("karte_id") == a["karte_id"] and g.get("plattform", "tiktok") == p
+                                          and g.get("status") == "geplant" for g in zustand["geplant"] + probe)]
+        ziel = [p for p in ziel if p not in doppelt]
+        if doppelt:
+            print(f"doppelt   {k.get('titel')}: schon geplant auf {', '.join(doppelt)}")
+        if not ziel:
+            gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"),
+                             "grund": "Schon auf allen Plattformen geplant, kein Doppelpost."})
+            if ist_live:
+                zustand["erledigte_auftraege"].append(a["id"])
+            continue
         texte = {p: texte_fuer(a, k, p, trends) for p in ziel}
         sperre_text = next((f"{p}: {g}" for p, (_, g) in texte.items() if g), None)
         if sperre_text:   # z. B. Glücksspiel-Wort in Marvins geändertem Text: bleibt offen, wird nie so gepostet
@@ -230,8 +264,8 @@ def main():
                 if warn:
                     hinweise[p] = "Bonus trotz Hinweis gepostet: " + " ".join(warn)
                 continue
-            grund_slot = slot_pruefen(wunsch[p], belegt[p]) if p in wunsch else None
-            slots[p] = wunsch[p] if p in wunsch and grund_slot is None else naechster_slot(belegt[p])
+            grund_slot = slot_pruefen(wunsch[p], belegt[p], plattform=p) if p in wunsch else None
+            slots[p] = wunsch[p] if p in wunsch and grund_slot is None else naechster_slot(belegt[p], plattform=p)
             if grund_slot:
                 hinweise[p] = "Wunsch-Slot ging nicht (" + grund_slot + "), nächster freier genommen."
         for p in ziel:
