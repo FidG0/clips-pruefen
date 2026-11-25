@@ -224,7 +224,7 @@ async function zeige() {
         <button class="klein" id="fertig-alle" style="margin-top:6px">${fertigAlle ? "Defekte ausblenden" : "Alle anzeigen"}</button></p>` : "")
       + (k.length ? "" : `<p class="leer">Gerade kein Clip mit sauberem Ton. Die neu gerenderten kommen von selbst.</p>`)
       + k.map(c => `<div class="karte">
-      <video controls playsinline preload="none" data-pfad="${esc(c.datei)}"></video>
+      <video controls playsinline preload="none" data-pfad="${esc(c.datei)}" data-vs="${esc(vorschauPfad(c) || "")}"></video>
       <div class="kopf"><span>${esc(c.kanal)}</span><span>${(c.hinweise || []).map(esc).join(" ")}</span></div>
       ${ampel(c)}
       ${defekt(c) ? `<div style="color:#e5484d;font-weight:700;font-size:14px">Ton defekt, wird neu gerendert</div>` : ""}
@@ -245,7 +245,12 @@ async function zeige() {
       sb.storage.from("fertig").createSignedUrls(pfade, 3600),
       sb.storage.from("fertig").createSignedUrls(pfade, 3600, { download: true })]);
     const a = Object.fromEntries((ansehen || []).map(l => [l.path, l.signedUrl])), d = Object.fromEntries((laden || []).map(l => [l.path, l.signedUrl]));
-    ziel.querySelectorAll("video[data-pfad]").forEach(v => { if (a[v.dataset.pfad]) v.src = a[v.dataset.pfad]; });
+    // 25.11. abends: Ansehen über die leichte Vorschau (unter 1 Mbit/s). Das Original hat 5 bis 20 Mbit/s, übers Handynetz blieb
+    // der Ton am Anfang hängen und raste dann nach vorn (Marvin). Herunterladen bleibt das Original.
+    const vs = [...ziel.querySelectorAll("video[data-vs]")].map(v => v.dataset.vs).filter(Boolean);
+    const { data: vsl } = vs.length ? await sb.storage.from(BUCKET_VORSCHAU).createSignedUrls(vs, 3600) : { data: [] };
+    const vu = Object.fromEntries((vsl || []).filter(l => l.signedUrl).map(l => [l.path, l.signedUrl]));
+    ziel.querySelectorAll("video[data-pfad]").forEach(v => { const u = vu[v.dataset.vs] || a[v.dataset.pfad]; if (u) v.src = u; });
     ziel.querySelectorAll("a.laden").forEach(x => { if (d[x.dataset.pfad]) x.href = d[x.dataset.pfad]; });
     ziel.querySelectorAll(".kopieren").forEach((b, i) => b.onclick = async () => {
       try { await navigator.clipboard.writeText(k[i].caption || k[i].titel || ""); b.textContent = "Kopiert ✓"; } catch (e) { alert(k[i].caption); }
