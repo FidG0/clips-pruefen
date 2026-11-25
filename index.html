@@ -558,5 +558,180 @@ setInterval(versionPruefen, 5 * 60 * 1000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) versionPruefen(); });
 start();
 </script>
+<!-- ===== HUD 2 Handy (25.11.2026 abends, Marvin: „übersichtlicher, selber Stil wie der PC, Menü statt Wischen zwischen den Kategorien“)
+     Zusatz-Ebene: Menü-Knopf mit Kategorien, neuer Reiter Cockpit mit Diagrammen, gleicher Look wie die Zentrale.
+     Prüfen, Posten, Sperren und Slots bleiben unverändert. -->
+<style id="hud2-css">
+  body { padding-bottom:24px; }
+  body::before { content:""; position:fixed; inset:-30%; z-index:-1; pointer-events:none;
+    background:radial-gradient(40% 30% at 25% 25%,rgba(37,226,255,.12),transparent 70%),radial-gradient(35% 28% at 75% 70%,rgba(255,59,212,.10),transparent 70%);
+    animation:h2aurora 50s ease-in-out infinite alternate; will-change:transform; }
+  @keyframes h2aurora { 0% { transform:translate3d(-5%,-3%,0) rotate(0); } 100% { transform:translate3d(5%,3%,0) rotate(10deg); } }
+  #toast { bottom:calc(20px + env(safe-area-inset-bottom)); }
+  /* Menü statt Reiterleiste zum Wischen */
+  #h2menue { display:flex; align-items:center; gap:10px; width:100%; margin-top:10px; padding:11px 14px; font-family:var(--display); font-size:15px; font-weight:700; letter-spacing:.5px;
+    background:linear-gradient(180deg,rgba(255,42,75,.22),rgba(255,42,75,.06)); border:1px solid rgba(255,42,75,.5); color:#fff; text-align:left; }
+  #h2menue .sym { width:18px; height:12px; flex:none; background:linear-gradient(var(--cyan),var(--cyan)) 0 0/100% 2px no-repeat,linear-gradient(var(--cyan),var(--cyan)) 0 50%/70% 2px no-repeat,linear-gradient(var(--cyan),var(--cyan)) 0 100%/100% 2px no-repeat; filter:drop-shadow(0 0 4px var(--cyan)); }
+  #h2menue .pfeil { margin-left:auto; color:var(--cyan); transition:transform .2s; }
+  #h2menue[aria-expanded="true"] .pfeil { transform:rotate(180deg); }
+  nav#nav { position:fixed; left:10px; right:10px; top:auto; bottom:auto; z-index:30; display:none; grid-template-columns:1fr 1fr; gap:8px; padding:12px;
+    background:rgba(6,9,17,.98); border:1px solid var(--linie2); border-radius:6px; box-shadow:0 30px 80px rgba(0,0,0,.7),0 0 0 1px rgba(37,226,255,.08); overflow:visible; backdrop-filter:none; }
+  nav#nav.auf:not([hidden]) { display:grid; animation:h2rein .22s both; }
+  nav#nav button { padding:14px 12px; font-size:15px; text-align:left; border:1px solid var(--linie); background:rgba(16,26,44,.7); border-radius:4px; }
+  nav#nav button.an { border-color:rgba(255,42,75,.6); box-shadow:inset 3px 0 0 var(--rot); }
+  nav#nav button small { display:block; font-family:var(--mono); font-size:10.5px; color:var(--leise); font-weight:400; margin-top:3px; letter-spacing:0; }
+  nav#nav #abmelden { grid-column:1/-1; text-align:center; }
+  .h2schleier { position:fixed; inset:0; z-index:29; background:rgba(2,4,9,.6); }
+  header { z-index:31; }
+  /* Karten wie in der Zentrale: Lichtkante oben, Aufbau beim Wechsel */
+  .karte::after { content:""; position:absolute; left:14px; right:14px; top:-1px; height:1px; pointer-events:none; background:linear-gradient(90deg,transparent,var(--cyan),transparent); opacity:.5; }
+  #inhalt.h2an > * { animation:h2rein .45s cubic-bezier(.2,.8,.2,1) both; }
+  #inhalt.h2an > :nth-child(2) { animation-delay:.04s; } #inhalt.h2an > :nth-child(3) { animation-delay:.08s; } #inhalt.h2an > :nth-child(n+4) { animation-delay:.12s; }
+  @keyframes h2rein { 0% { opacity:0; transform:translateY(8px); } 100% { opacity:1; transform:none; } }
+  /* Cockpit */
+  .h2kpis { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:16px; }
+  .h2kpi { position:relative; background:var(--karte); border:1px solid var(--linie); border-radius:3px; padding:12px; }
+  .h2kpi b { display:block; font-family:var(--display); font-size:28px; font-weight:700; line-height:1.1; font-variant-numeric:tabular-nums; text-shadow:0 0 16px rgba(230,241,255,.18); }
+  .h2kpi span { font-size:12px; color:var(--leise); }
+  .h2kpi.du { border-color:rgba(255,42,75,.55); box-shadow:inset 0 0 30px rgba(255,42,75,.1); } .h2kpi.du b { color:#ff8a9c; }
+  .h2kpi.gut b { color:var(--gruen); }
+  .karte h3 { margin:0 0 10px; display:flex; align-items:center; gap:8px; }
+  .karte h3::before { content:""; width:6px; height:6px; background:var(--cyan); box-shadow:0 0 8px var(--cyan); }
+  .dia svg { display:block; width:100%; height:auto; }
+  .dia text { fill:var(--leise); font-family:var(--mono); font-size:10px; }
+  .dia .h2dv { font-family:var(--display); font-size:24px; font-weight:700; fill:var(--text); }
+  .dia .h2dl { font-size:8.5px; }
+  .dia .h2cz { fill:var(--text); font-weight:700; font-size:9.5px; }
+  .dia .heute { fill:var(--cyan); }
+  .leg { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:12px; color:var(--leise); margin-top:8px; }
+  .leg i { display:inline-block; width:9px; height:9px; margin-right:5px; vertical-align:-1px; border-radius:50%; }
+  .leg b { font-family:var(--mono); color:var(--text); }
+  .h2stapel { display:flex; height:14px; border-radius:2px; overflow:hidden; background:#18253b; }
+  .h2stapel span { display:block; height:100%; }
+  .h2balken { display:grid; grid-template-columns:96px 1fr 34px; gap:8px; align-items:center; font-size:13px; margin:6px 0; }
+  .h2balken .b { height:8px; background:#18253b; border-radius:1px; overflow:hidden; }
+  .h2balken .b i { display:block; height:100%; background:linear-gradient(90deg,var(--magenta),var(--cyan)); box-shadow:0 0 8px rgba(37,226,255,.5); }
+  .h2balken span:last-child { font-family:var(--mono); font-size:12px; color:var(--gelb); text-align:right; }
+  #inhalt.h2an .h2wachs { animation:h2wachs .8s .1s cubic-bezier(.2,.8,.2,1) both; transform-origin:left; }
+  @keyframes h2wachs { 0% { transform:scaleX(0); } 100% { transform:none; } }
+  @media (prefers-reduced-motion:reduce) { body::before { display:none; } }
+</style>
+<script id="hud2">
+(() => {
+  const nav = $("#nav"), kopf = document.querySelector("header");
+  const NAMEN = { cockpit: ["Cockpit", "Diagramme, Lage auf einen Blick"], pruefen: ["Prüfen", "Ja, Nein, Überarbeiten, Posten"], clips: ["Clips", "alle Clips mit Filter"], fertig: ["Fertig", "neu gerendert, postbar"],
+    erledigt: ["Erledigt", "deine letzten Entscheidungen"], videos: ["Videos", "was der PC gerade sichtet"], posting: ["Posting", "geplant, gesendet, Zahlen"] };
+  // Cockpit-Knopf vorne ins Menü, alle Knöpfe mit Untertitel
+  nav.insertAdjacentHTML("afterbegin", `<button data-ansicht="cockpit">Cockpit</button>`);
+  nav.querySelector('[data-ansicht="cockpit"]').onclick = function () { ansicht = "cockpit"; nav.querySelectorAll("[data-ansicht]").forEach(x => x.classList.toggle("an", x === this)); zeige(); };
+  nav.querySelectorAll("[data-ansicht]").forEach(b => { const n = NAMEN[b.dataset.ansicht]; if (n) b.innerHTML = `${n[0]}<small>${n[1]}</small>`; });
+  const knopf = document.createElement("button"); knopf.id = "h2menue"; knopf.type = "button"; knopf.setAttribute("aria-haspopup", "true"); knopf.setAttribute("aria-expanded", "false");
+  kopf.insertBefore(knopf, nav);
+  const beschriften = () => { knopf.innerHTML = `<span class="sym"></span><span>${esc((NAMEN[ansicht] || [ansicht])[0])}</span><span class="pfeil">▾</span>`; };
+  const menue = auf => {
+    nav.classList.toggle("auf", auf); knopf.setAttribute("aria-expanded", auf ? "true" : "false"); document.querySelector(".h2schleier")?.remove();
+    if (auf) { nav.style.top = (kopf.getBoundingClientRect().bottom + 6) + "px"; const s = document.createElement("div"); s.className = "h2schleier"; s.onclick = () => menue(false); document.body.append(s); }
+  };
+  knopf.onclick = () => menue(!nav.classList.contains("auf"));
+  nav.addEventListener("click", e => { if (e.target.closest("button")) { menue(false); setTimeout(beschriften, 0); } });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && nav.classList.contains("auf")) menue(false); });
+  // Menü-Knopf nur angemeldet (folgt dem hidden der Reiter, das start() setzt)
+  const sichtbar = () => { knopf.hidden = nav.hidden; if (nav.hidden) menue(false); };
+  new MutationObserver(sichtbar).observe(nav, { attributes: true, attributeFilter: ["hidden"] }); sichtbar(); beschriften();
+
+  // Seitenwechsel: kurzer Aufbau, Cockpit als eigene Ansicht
+  const _zeige = zeige; let vorher = null;
+  zeige = async function () {
+    beschriften();
+    const ziel = $("#inhalt"), neu = vorher !== ansicht; vorher = ansicht;
+    if (ansicht === "cockpit") { pcStand(); await cockpit(ziel); }
+    else { await _zeige(); await zusatz(ansicht, ziel).catch(() => {}); }
+    if (neu) { ziel.classList.remove("h2an"); void ziel.offsetWidth; ziel.classList.add("h2an"); setTimeout(() => ziel.classList.remove("h2an"), 1200); }
+  };
+
+  const F = { cyan: "#25e2ff", gruen: "#3dff9a", magenta: "#ff3bd4", rot: "#ff2a4b", gelb: "#ffd23f", grau: "#56657d", linie: "#1c2b44" };
+  const z = n => Number(n || 0).toLocaleString("de-DE");
+  function donut(teile, mitte, unter) {
+    const sum = teile.reduce((a, t) => a + t.n, 0) || 1, r = 52, u = 2 * Math.PI * r; let off = 0;
+    let s = `<svg viewBox="0 0 140 140" role="img" aria-label="${esc(unter)}"><circle cx="70" cy="70" r="${r}" fill="none" stroke="#18253b" stroke-width="13"/>`;
+    teile.forEach(t => { if (!t.n) return; const len = u * t.n / sum;
+      s += `<circle cx="70" cy="70" r="${r}" fill="none" stroke="${t.f}" stroke-width="13" stroke-dasharray="${Math.max(.5, len - 2)} ${u}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)" style="filter:drop-shadow(0 0 4px ${t.f})"/>`; off += len; });
+    return s + `<text x="70" y="74" text-anchor="middle" class="h2dv">${mitte}</text><text x="70" y="91" text-anchor="middle" class="h2dl">${esc(unter)}</text></svg>`;
+  }
+  async function cockpit(ziel, nurDaten) {
+    if (!nurDaten) ziel.innerHTML = `<p class="leer" style="padding:20px 0">Lade Cockpit …</p>`;
+    const [{ data: karten, error }, { data: po }, { data: au }] = await Promise.all([
+      sb.from("karten").select("id,status,kanal,punkte,checks,datei,titel").limit(1000),
+      sb.from("info").select("wert").eq("schluessel", "posting").maybeSingle(),
+      sb.from("info").select("wert").eq("schluessel", "auswertung").maybeSingle()]);
+    if (!nurDaten && ansicht !== "cockpit") return;
+    if (error) return nurDaten ? null : ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
+    const k = karten || [], g = po?.wert?.geplant || [], a = au?.wert || {};
+    const offen = k.filter(x => x.status === "pruefen").length, fertig = k.filter(x => x.datei);
+    const postbar = fertig.filter(x => !sperrgrund(x)).length;
+    const geplant = g.filter(x => x.status === "geplant"), gesendet = g.filter(x => x.status === "gesendet");
+    // Ton-Ampel der fertigen Clips
+    const ton = { gruen: 0, gelb: 0, rot: 0, grau: 0 }; fertig.forEach(x => { const s = x.checks?.ton_sync?.status || "grau"; ton[s in ton ? s : "grau"]++; });
+    const tonSum = Object.values(ton).reduce((p, q) => p + q, 0);
+    // Status-Verteilung
+    const st = {}; k.forEach(x => { st[x.status || "?"] = (st[x.status || "?"] || 0) + 1; });
+    const farbe = { pruefen: F.gelb, behalten: F.gruen, fertig: F.gruen, ueberarbeiten: F.magenta, abgelehnt: F.rot, weg: F.grau };
+    const stListe = Object.entries(st).sort((p, q) => q[1] - p[1]);
+    // Kalender-Auslastung 7 Tage x Slots, Berliner Zeit, je Slot belegte Plattformen
+    const belegt = {}; g.filter(x => ["geplant", "gesendet"].includes(x.status)).forEach(x => { const d = new Date(x.slot_utc);
+      const key = berlinTag(d) + " " + d.toLocaleTimeString("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" });
+      (belegt[key] || (belegt[key] = new Set())).add(x.plattform || "tiktok"); });
+    const tage = [...Array(7)].map((_, i) => new Date(Date.now() + i * 86400000));
+    const W = 360, L = 44, T = 18, cw = (W - L) / 7, ch = 24, H = T + SLOTS.length * ch + 4;
+    let kal = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Kalender-Auslastung">`, voll = 0, ges = 0;
+    tage.forEach((d, i) => { const tag = berlinTag(d), x = L + i * cw;
+      kal += `<text x="${x + cw / 2}" y="11" text-anchor="middle" class="${i ? "" : "heute"}">${i ? d.toLocaleDateString("de-DE", { weekday: "short", timeZone: "Europe/Berlin" }).slice(0, 2) : "heute"}</text>`;
+      SLOTS.forEach((sl, j) => { const n = belegt[tag + " " + sl]?.size || 0, b = BONUS.includes(sl), y = T + j * ch, c = b ? F.magenta : F.cyan;
+        const vorbei = berlinUtc(tag, sl).getTime() < Date.now(); if (!vorbei && !b) { ges += 3; voll += Math.min(3, n); }
+        kal += `<rect x="${x + 1.5}" y="${y + 1.5}" width="${cw - 3}" height="${ch - 3}" rx="2" fill="${n ? c : "transparent"}" fill-opacity="${n ? .2 + .5 * n / 3 : 0}" stroke="${n ? c : F.linie}" ${n ? "" : `stroke-dasharray="3 3"`} opacity="${vorbei ? .35 : 1}"/>`
+          + (n ? `<text x="${x + cw / 2}" y="${y + ch / 2 + 3.5}" text-anchor="middle" class="h2cz">${n}/3</text>` : ""); }); });
+    SLOTS.forEach((sl, j) => { kal += `<text x="${L - 6}" y="${T + j * ch + ch / 2 + 3.5}" text-anchor="end" style="${BONUS.includes(sl) ? `fill:${F.magenta}` : ""}">${sl}</text>`; });
+    kal += `</svg>`;
+    // Streamer: Clips je Kanal mit Ø Punkte
+    const kan = {}; k.forEach(x => { if (!x.kanal) return; const o = kan[x.kanal] || (kan[x.kanal] = { n: 0, p: [] }); o.n++; if (x.punkte != null) o.p.push(+x.punkte); });
+    const kanL = Object.entries(kan).sort((p, q) => q[1].n - p[1].n).slice(0, 7), kmax = Math.max(1, ...kanL.map(e => e[1].n));
+    // 25.11. (Marvin: übersichtlicher): Cockpit nur kompakt, die Grafiken stehen in den Reitern, zu denen sie gehören
+    H2c.kal = { svg: kal, q: ges ? Math.round(100 * voll / ges) : 0 }; H2c.ton = { ton, tonSum }; H2c.kanL = kanL; H2c.kmax = kmax; H2c.t = Date.now();
+    ziel.innerHTML = `<div class="h2kpis">
+        <div class="h2kpi ${offen ? "du" : ""}"><b>${z(offen)}</b><span>warten auf dein Ja</span></div>
+        <div class="h2kpi gut"><b>${z(postbar)}</b><span>fertig und postbar</span></div>
+        <div class="h2kpi"><b>${z(geplant.length)}</b><span>Posts geplant</span></div>
+        <div class="h2kpi"><b>${a.anzahl_posts ? z(Math.round(a.median_views_d3 || 0)) : z(gesendet.length)}</b><span>${a.anzahl_posts ? "Median Aufrufe (Tag 3)" : "Posts gesendet"}</span></div></div>
+      ${offen ? `<button class="ja" style="width:100%;margin-bottom:16px;padding:14px" id="h2los">Jetzt ${z(offen)} Clips prüfen</button>` : ""}
+      <div class="karte"><h3>Wo die Clips stehen</h3><div class="h2stapel h2wachs">${stListe.map(([s, n]) => `<span style="width:${100 * n / (k.length || 1)}%;background:${farbe[s] || F.cyan};box-shadow:0 0 8px ${farbe[s] || F.cyan}" title="${esc(s)}: ${n}"></span>`).join("")}</div>
+        <div class="leg">${stListe.map(([s, n]) => `<span><i style="background:${farbe[s] || F.cyan}"></i>${esc(s)} <b>${n}</b></span>`).join("")}</div>
+        <div class="leg">Kalender ${H2c.kal.q} % belegt · Ton grün ${tonSum ? Math.round(100 * ton.gruen / tonSum) : 0} %</div></div>`;
+    const los = $("#h2los"); if (los) los.onclick = () => nav.querySelector('[data-ansicht="pruefen"]').click();
+  }
+  // Grafiken in den passenden Reitern: Posting = Kalender, Fertig = Ton-Ampel, Clips = Streamer (zugeklappt)
+  const H2c = {};
+  async function daten() { if (!H2c.t || Date.now() - H2c.t > 30000) await cockpit(null, true); }
+  async function zusatz(art, ziel) {
+    if (!["posting", "fertig", "clips"].includes(art)) return;
+    await daten(); if (ansicht !== art) return;
+    let html = "";
+    if (art === "posting" && H2c.kal) html = `<div class="karte"><h3>Kalender, 7 Tage</h3><div class="dia">${H2c.kal.svg}</div>
+      <div class="leg"><span><i style="background:${F.cyan}"></i>belegt (TikTok, Shorts, Reels)</span><span><i style="background:${F.magenta}"></i>Bonus</span><span>Auslastung <b>${H2c.kal.q} %</b></span></div></div>`;
+    if (art === "fertig" && H2c.ton?.tonSum) { const { ton, tonSum } = H2c.ton, t = [["gruen", "postbar", F.gruen], ["gelb", "gelb", F.gelb], ["rot", "rot", F.rot], ["grau", "ungemessen", F.grau]];
+      html = `<div class="karte"><h3>Ton-Ampel</h3><div class="h2stapel h2wachs">${t.map(([k, n, c]) => `<span style="width:${100 * ton[k] / tonSum}%;background:${c};box-shadow:0 0 8px ${c}"></span>`).join("")}</div>
+        <div class="leg">${t.map(([k, n, c]) => `<span><i style="background:${c}"></i>${n} <b>${ton[k]}</b></span>`).join("")}</div></div>`; }
+    if (art === "clips" && H2c.kanL?.length) html = `<details class="karte"><summary style="cursor:pointer;font-family:var(--display);font-size:13px;letter-spacing:1.3px;text-transform:uppercase;color:#9fb6d6">Streamer</summary>
+      ${H2c.kanL.map(([n, o]) => `<div class="h2balken"><span>${esc(n.slice(0, 13))}</span><div class="b"><i style="width:${100 * o.n / H2c.kmax}%"></i></div><span>${o.p.length ? Math.round(o.p.reduce((p, q) => p + q, 0) / o.p.length) : "–"}</span></div>`).join("")}
+      <div class="leg"><span>Balken = Anzahl Clips, rechts Ø Punkte</span></div></details>`;
+    if (html && !ziel.querySelector(".h2zusatz")) ziel.insertAdjacentHTML("afterbegin", `<div class="h2zusatz">${html}</div>`);
+  }
+  // Vorschau leiser (Marvin 25.11.): nur die Wiedergabe, Dateien und Posts bleiben unverändert. Start 45 %, eigener Regler-Wert wird gemerkt.
+  const LAUT = () => { try { const v = parseFloat(localStorage.getItem("h2laut")); return isNaN(v) ? 0.45 : v; } catch (e) { return 0.45; } };
+  const leise = e => { const v = e.target; if (v.tagName === "VIDEO" && !v.dataset.h2laut) { v.dataset.h2laut = "1"; v.volume = LAUT(); } };
+  document.addEventListener("loadedmetadata", leise, true); document.addEventListener("play", leise, true);
+  document.addEventListener("volumechange", e => { const v = e.target; if (v.tagName === "VIDEO" && v.dataset.h2laut && !v.muted) try { localStorage.setItem("h2laut", String(v.volume)); } catch (x) {} }, true);
+})();
+</script>
+
 </body>
 </html>
