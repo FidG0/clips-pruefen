@@ -732,7 +732,8 @@ start();
 (() => {
   const nav = $("#nav"), kopf = document.querySelector("header");
   const NAMEN = { cockpit: ["Cockpit", "Diagramme, Lage auf einen Blick"], pruefen: ["Prüfen", "Ja, Nein, Überarbeiten, Posten"], clips: ["Clips", "alle Clips mit Filter"], fertig: ["Fertig", "neu gerendert, postbar"],
-    erledigt: ["Erledigt", "deine letzten Entscheidungen"], videos: ["Videos", "was der PC gerade sichtet"], posting: ["Posting", "geplant, gesendet, Zahlen"] };
+    erledigt: ["Erledigt", "deine letzten Entscheidungen"], videos: ["Videos", "was der PC gerade sichtet"], posting: ["Posting", "geplant, gesendet, Zahlen"],
+    lernen: ["Lernen", "Fragen und Pointe-Knopf"] };
   // Cockpit-Knopf vorne ins Menü, alle Knöpfe mit Untertitel
   nav.insertAdjacentHTML("afterbegin", `<button data-ansicht="cockpit">Cockpit</button>`);
   nav.querySelector('[data-ansicht="cockpit"]').onclick = function () { ansicht = "cockpit"; nav.querySelectorAll("[data-ansicht]").forEach(x => x.classList.toggle("an", x === this)); zeige(); };
@@ -844,6 +845,8 @@ start();
   document.addEventListener("volumechange", e => { const v = e.target; if (v.tagName === "VIDEO" && v.dataset.h2laut && !v.muted) try { localStorage.setItem("h2laut", String(v.volume)); } catch (x) {} }, true);
 })();
 </script>
+<!-- Lernen (25.11.2026): Fragen zu Clips und Pointe-Knopf, eigene Datei lernen.js. Schreibt nur in lern_antworten. -->
+<script src="lernen.js"></script>
 
 </body>
 </html>
