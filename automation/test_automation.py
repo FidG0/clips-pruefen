@@ -262,6 +262,25 @@ class WunschSlots(unittest.TestCase):
         alt = [dict(g, slot_utc=(self.jetzt - dt.timedelta(hours=1)).isoformat()) for g in zukunft]
         self.assertIsNone(lib.buffer_voll(alt, "tiktok", self.jetzt))
 
+    def test_sofort_regeln(self):
+        j = self.jetzt   # 13:00 Berlin
+        g = lambda z, **x: {"plattform": "tiktok", "status": "geplant", "slot_utc": lib.slot_aus_lokal(z).isoformat(), **x}  # noqa: E731
+        t, grund = lib.sofort_slot([], "tiktok", j)
+        self.assertIsNone(grund)
+        self.assertEqual(t, j + dt.timedelta(minutes=5))
+        self.assertIn("Abstand", lib.sofort_slot([g("2026-11-25T13:30")], "tiktok", j)[1])
+        self.assertIn("schon einen Bonus", lib.sofort_slot([g("2026-11-25T22:00")], "tiktok", j)[1])
+        self.assertIn("schon einen Bonus", lib.sofort_slot([g("2026-11-25T10:00", bonus=True)], "tiktok", j)[1])
+        self.assertIsNone(lib.sofort_slot([g("2026-11-25T22:00")], "youtube", j)[1])
+        self.assertEqual(lib.wunsch_slots(lib.wunsch_kommentar({"tiktok": "sofort"})), {"tiktok": "sofort"})
+
+    def test_sofort_im_job(self):
+        z = self._lauf("[posten] slot:tiktok=sofort slot:youtube=sofort")
+        self.assertEqual(sorted(e["plattform"] for e in z), ["tiktok", "youtube"])
+        self.assertTrue(all(e.get("bonus") for e in z))
+        frueh = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=20)
+        self.assertTrue(all(dt.datetime.fromisoformat(e["slot_utc"]) < frueh for e in z))
+
     def test_ohne_wunsch_alle_plattformen(self):
         self.assertEqual(sorted(e["plattform"] for e in self._lauf("[posten]")), ["instagram", "tiktok", "youtube"])
 

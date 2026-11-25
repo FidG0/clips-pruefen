@@ -176,6 +176,9 @@ def wunsch_slots(kommentar):
     """{plattform: slot_utc (datetime)} aus dem Kommentar. Kaputte Einträge werden ignoriert."""
     aus = {}
     for p, wert in _WUNSCH.findall(str(kommentar or "")):
+        if wert == "sofort":   # 25.11.: Bonus-Clip jetzt posten (siehe sofort_slot)
+            aus[p] = "sofort"
+            continue
         try:
             t = dt.datetime.fromisoformat(wert.replace("Z", "+00:00"))
         except ValueError:
@@ -187,7 +190,7 @@ def wunsch_slots(kommentar):
 
 def wunsch_kommentar(slots, cfg=CONFIG):
     """Gegenstück zu wunsch_slots: {plattform: slot_utc} -> Kommentar mit Marker."""
-    teile = [cfg["marker"]] + [f"slot:{p}={t.astimezone(dt.timezone.utc).isoformat()}" for p, t in sorted(slots.items())]
+    teile = [cfg["marker"]] + [f"slot:{p}={t if t == 'sofort' else t.astimezone(dt.timezone.utc).isoformat()}" for p, t in sorted(slots.items())]
     return " ".join(teile)
 
 
@@ -195,6 +198,37 @@ def slot_aus_lokal(text, cfg=CONFIG):
     """'2026-11-26T16:00' (Berliner Zeit, wie im Kalender) -> UTC-datetime."""
     t = dt.datetime.fromisoformat(str(text)[:16])
     return t.replace(tzinfo=ZoneInfo(cfg["zeitzone"])).astimezone(dt.timezone.utc)
+
+
+def ist_bonus(slot_utc, cfg=CONFIG):
+    return slot_utc.astimezone(ZoneInfo(cfg["zeitzone"])).strftime("%H:%M") in cfg.get("bonus_slots", [])
+
+
+def sofort_slot(geplant, plattform, jetzt_utc=None, cfg=CONFIG):
+    """Bonus-Clip jetzt: (slot_utc, None) oder (None, Grund). Regeln: höchstens EIN Bonus pro Tag und Plattform
+    (gewählter Bonus-Slot oder sofort), höchstens max_posts_pro_tag, mindestens 60 Min Abstand zu jedem anderen Post."""
+    tz = ZoneInfo(cfg["zeitzone"])
+    jetzt = jetzt_utc or dt.datetime.now(dt.timezone.utc)
+    t = (jetzt + dt.timedelta(minutes=cfg.get("sofort_vorlauf_minuten", 5))).replace(second=0, microsecond=0)
+    tag = t.astimezone(tz).date()
+    heute = []
+    for g in geplant:
+        if g.get("plattform", "tiktok") != plattform or g.get("status") not in ("geplant", "gesendet"):
+            continue
+        try:
+            s = dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            continue
+        if s.astimezone(tz).date() == tag:
+            heute.append((s, g))
+    if any(g.get("bonus") or ist_bonus(s, cfg) for s, g in heute):
+        return None, "Heute gibt es auf dieser Plattform schon einen Bonus-Clip."
+    if len(heute) >= cfg["max_posts_pro_tag"]:
+        return None, f"Heute sind schon {cfg['max_posts_pro_tag']} Posts geplant."
+    nah = [s for s, _ in heute if abs((s - t).total_seconds()) < cfg.get("sofort_abstand_minuten", 60) * 60]
+    if nah:
+        return None, f"Zu nah am Post um {nah[0].astimezone(tz).strftime('%H:%M')} (mind. {cfg.get('sofort_abstand_minuten', 60)} Min Abstand)."
+    return t, None
 
 
 def buffer_voll(geplant, plattform, jetzt_utc=None, cfg=CONFIG):

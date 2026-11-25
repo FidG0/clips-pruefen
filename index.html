@@ -400,13 +400,21 @@ async function slotsFuellen() {
     }
   }
   const voll = PLATTF.filter(p => slotCache.geplant.filter(g => (g.plattform || "tiktok") === p && g.status === "geplant" && new Date(g.slot_utc) > new Date()).length >= BUFFER_MAX);
+  // 25.11.: Bonus jetzt (in ~5 Min). Regeln wie lib.sofort_slot: 1 Bonus pro Tag, 60 Min Abstand. posten.py prüft nochmal.
+  const heute = berlinTag(new Date()), bald = Date.now() + 5 * 60000;
+  const heuteG = slotCache.geplant.filter(g => berlinTag(new Date(g.slot_utc)) === heute);
+  const bonusSchon = heuteG.some(g => g.bonus || BONUS.includes(new Date(g.slot_utc).toLocaleTimeString("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })));
+  const zuNah = heuteG.find(g => Math.abs(new Date(g.slot_utc).getTime() - bald) < 60 * 60000);
+  opt.unshift(bonusSchon ? `<option disabled>⚡ Bonus jetzt: heute schon ein Bonus-Clip</option>`
+    : zuNah ? `<option disabled>⚡ Bonus jetzt: zu nah am Post um ${new Date(zuNah.slot_utc).toLocaleTimeString("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })}</option>`
+    : `<option value="sofort">⚡ Bonus jetzt sofort posten</option>`);
   if (voll.length) opt.unshift(`<option disabled>Buffer Free voll (${BUFFER_MAX} geplant): Freigabe wartet, bis ein Post raus ist</option>`);
   document.querySelectorAll("#slotWahl, select.fslot").forEach(sel => { if (!sel.dataset.gefuellt) { sel.dataset.gefuellt = "1"; sel.insertAdjacentHTML("beforeend", opt.join("")); } });
 }
 // 25.11. abends: Posten auch aus „Fertig“ (schon geprüfte Clips standen nie in der Prüf-Schlange, also gab es dort keinen Posten-Knopf)
 async function postenFertig(c, wahl, knopf) {
   if (sperrgrund(c)) return toast("Posten gesperrt: " + sperrgrund(c));
-  const wann = wahl ? new Date(wahl).toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "im nächsten freien Slot";
+  const wann = wahl === "sofort" ? "JETZT als Bonus-Clip (in etwa 5 Minuten)" : wahl ? new Date(wahl).toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "im nächsten freien Slot";
   if (!confirm(`Wirklich öffentlich posten?\n\n„${c.titel}“\n\nTikTok, YouTube Shorts und Instagram Reels, ${wann}.`)) return;
   knopf.disabled = true; knopf.textContent = "Wird freigegeben …";
   const { data: s } = await sb.auth.getSession();
@@ -469,6 +477,7 @@ async function entscheide(aktion) {
     // Gründe stehen als [gründe: ton, lang] vor der Notiz, so kann der PC sie fürs Regelwerk auslesen, ohne neue Spalte.
     const gr = gewaehlt.size ? `[gründe: ${[...gewaehlt].join(", ")}] ` : "";
     const wahl = aktion === "posten" ? ($("#slotWahl")?.value || "") : "";
+    if (wahl === "sofort" && !confirm(`Jetzt als Bonus-Clip posten?\n\n„${k.titel}“\n\nGeht in etwa 5 Minuten auf TikTok, YouTube Shorts und Instagram Reels.`)) return;
     const marker = aktion === "posten" ? MARKER + " " + (wahl ? PLATTF.map(p => `slot:${p}=${wahl}`).join(" ") + " " : "") : "";
     const echt = aktion === "posten" ? "behalten" : aktion;
     const { data, error } = await sb.from("auftraege").insert({ karte_id: k.id, aktion: echt, kommentar: (marker + gr + notiz).trim(), titel: titel || null, von: s.session.user.id }).select("id").maybeSingle();
