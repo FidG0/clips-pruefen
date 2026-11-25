@@ -11,7 +11,7 @@ import urllib.parse
 from zoneinfo import ZoneInfo
 
 from lib import (CONFIG, Buffer, Supabase, caption_bauen, format_von, live, metadata_bauen,
-                 naechster_slot, sperrgrund, titel_typ)
+                 naechster_slot, slot_pruefen, sperrgrund, titel_typ, wunsch_slots)
 
 STANDARD = {"erledigte_auftraege": [], "geplant": [], "probelauf": [], "gesperrt": [], "letzter_lauf": None}
 
@@ -65,9 +65,24 @@ def main():
     ist_live = live()
     plattformen = aktive_plattformen()
     kanaele = {}
-    if offen and ist_live:
-        buf = Buffer()
-        _, kanaele = buf.kanaele(CONFIG["buffer_kanal_name"])
+    jetzt = dt.datetime.now(dt.timezone.utc)
+    bstand = zustand.get("buffer") or {}
+    try:
+        alter = (jetzt - dt.datetime.fromisoformat(bstand["geprueft"])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        alter = 1e9
+    # Verbindungs-Status für die Kanäle-Seite der Zentrale: bei jeder Freigabe, sonst höchstens stündlich
+    if ist_live and (offen or alter > 3600):
+        try:
+            buf = Buffer()
+            _, kanaele = buf.kanaele(CONFIG["buffer_kanal_name"])
+            zustand["buffer"] = {"geprueft": jetzt.isoformat(), "fehler": None,
+                                 "kanaele": {p: (k.get("displayName") or k.get("name")) for p, k in kanaele.items()}}
+        except Exception as fehler:
+            zustand["buffer"] = {"geprueft": jetzt.isoformat(), "fehler": str(fehler)[:200], "kanaele": {}}
+            if offen:   # wie bisher: Freigaben bleiben offen und werden im nächsten Lauf neu versucht
+                sb.info_schreiben("posting", zustand)
+                raise
 
     belegt = {p: belegte_slots(zustand["geplant"], p) for p in plattformen}
     probe, gesperrt = [], []
@@ -82,10 +97,22 @@ def main():
             continue
         bucket, pfad = videodatei(k)
         link = None
-        for p in plattformen:
-            slot = naechster_slot(belegt[p])
+        wunsch = wunsch_slots(a.get("kommentar"))   # Kalender: nur gewählte Plattformen, je im gewählten Slot
+        ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
+        slots, hinweise = {}, {}
+        for p in ziel:
+            grund_slot = slot_pruefen(wunsch[p], belegt[p]) if p in wunsch else None
+            slots[p] = wunsch[p] if p in wunsch and grund_slot is None else naechster_slot(belegt[p])
+            if grund_slot:
+                hinweise[p] = "Wunsch-Slot ging nicht (" + grund_slot + "), nächster freier genommen."
+        for p in ziel:
+            slot = slots[p]
             text, meta = caption_bauen(k, plattform=p), metadata_bauen(k, p)
             e = eintrag(a, p, slot, text, meta)
+            if p in wunsch:
+                e["wunsch"] = True
+            if hinweise.get(p):
+                e["hinweis"] = hinweise[p]
             if not pfad:
                 e.update(status="fehler", fehler="Keine Videodatei in Supabase (datei/vorschau fehlt).")
             elif ist_live:
@@ -93,7 +120,7 @@ def main():
                     if p not in kanaele:
                         raise RuntimeError(f"Kein {p}-Kanal in Buffer verbunden.")
                     if link is None:
-                        letzter = max(naechster_slot(belegt[x]) for x in plattformen)
+                        letzter = max(slots.values())
                         gueltig = (letzter - dt.datetime.now(dt.timezone.utc)).total_seconds() + CONFIG["link_gueltig_tage"] * 86400
                         link = sb.signierter_link(bucket, pfad, gueltig)
                     e["buffer_id"] = buf.post_planen(kanaele[p]["id"], text, link, slot, meta)["id"]

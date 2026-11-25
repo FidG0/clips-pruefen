@@ -177,6 +177,77 @@ class PostenProbelauf(unittest.TestCase):
         self.assertEqual([g["auftrag_id"] for g in z["gesperrt"]], [8])
 
 
+class WunschSlots(unittest.TestCase):
+    UTC = dt.timezone.utc
+    jetzt = dt.datetime(2026, 11, 25, 12, 0, tzinfo=dt.timezone.utc)   # 13:00 Berlin
+
+    def test_kommentar_hin_und_zurueck(self):
+        s = {"tiktok": lib.slot_aus_lokal("2026-11-26T16:00"), "youtube": lib.slot_aus_lokal("2026-11-26T19:00")}
+        k = lib.wunsch_kommentar(s)
+        self.assertTrue(k.startswith("[posten] "))
+        self.assertEqual(lib.wunsch_slots(k), s)
+        self.assertEqual(s["tiktok"], dt.datetime(2026, 11, 26, 15, 0, tzinfo=self.UTC))
+        self.assertEqual(lib.wunsch_slots("[posten]"), {})
+        self.assertEqual(lib.wunsch_slots("[posten] slot:tiktok=kaputt"), {})
+
+    def test_slot_regeln(self):
+        p = lambda t, b=(): lib.slot_pruefen(lib.slot_aus_lokal(t), set(b), self.jetzt)  # noqa: E731
+        self.assertIsNone(p("2026-11-25T16:00"))
+        self.assertIn("kein Posting-Slot", p("2026-11-25T17:00"))
+        knapp = dt.datetime(2026, 11, 25, 14, 45, tzinfo=self.UTC)   # 15:45 Berlin, 16:00 nur 15 Min weg
+        self.assertIn("vorbei", lib.slot_pruefen(lib.slot_aus_lokal("2026-11-25T16:00"), set(), knapp))
+        self.assertIn("belegt", p("2026-11-25T19:00", ["2026-11-25T18:00:00+00:00"]))
+        voll = ["2026-11-26T15:00:00+00:00", "2026-11-26T18:00:00+00:00", "2026-11-26T19:30:00+00:00"]
+        self.assertIn("belegt", p("2026-11-26T20:30", voll))
+
+    def _lauf(self, kommentar, geplant=()):
+        import os
+        import posten
+
+        class FakeSb:
+            gespeichert = {}
+
+            def info_lesen(self, k, d=None):
+                return {"geplant": [dict(g) for g in geplant]}
+
+            def info_schreiben(self, k, w):
+                FakeSb.gespeichert[k] = w
+
+            def holen(self, t, q):
+                return [{"id": 9, "karte_id": "k9", "kommentar": kommentar, "titel": None,
+                         "karten": {"titel": "NPC fährt gegen Laterne", "kanal": "Zarbex", "datei": "a.mp4",
+                                    "checks": {"ton_sync": {"status": "gruen"}}}}]
+
+        alt = posten.Supabase
+        posten.Supabase = FakeSb
+        os.environ.pop("BUFFER_LIVE", None)
+        try:
+            posten.main()
+        finally:
+            posten.Supabase = alt
+        return FakeSb.gespeichert["posting"]["probelauf"]
+
+    def test_kalender_slot_nur_gewaehlte_plattform(self):
+        morgen = (dt.datetime.now(ZoneInfo("Europe/Berlin")) + dt.timedelta(days=2)).strftime("%Y-%m-%d")
+        ziel = lib.slot_aus_lokal(morgen + "T19:00")
+        z = self._lauf(lib.wunsch_kommentar({"tiktok": ziel}))
+        self.assertEqual([e["plattform"] for e in z], ["tiktok"])
+        self.assertEqual(z[0]["slot_utc"], ziel.isoformat())
+        self.assertTrue(z[0]["wunsch"])
+
+    def test_belegter_wunsch_nimmt_naechsten(self):
+        morgen = (dt.datetime.now(ZoneInfo("Europe/Berlin")) + dt.timedelta(days=2)).strftime("%Y-%m-%d")
+        ziel = lib.slot_aus_lokal(morgen + "T19:00")
+        z = self._lauf(lib.wunsch_kommentar({"youtube": ziel}),
+                       [{"plattform": "youtube", "slot_utc": ziel.isoformat(), "status": "geplant"}])
+        self.assertEqual(len(z), 1)
+        self.assertNotEqual(z[0]["slot_utc"], ziel.isoformat())
+        self.assertIn("Wunsch-Slot ging nicht", z[0]["hinweis"])
+
+    def test_ohne_wunsch_alle_plattformen(self):
+        self.assertEqual(sorted(e["plattform"] for e in self._lauf("[posten]")), ["instagram", "tiktok", "youtube"])
+
+
 class Sperren(unittest.TestCase):
     ok = {"titel": "NPC fährt gegen Laterne", "datei": "x.mp4", "checks": {"ton_sync": {"status": "gruen"}}}
 
