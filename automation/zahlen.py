@@ -12,7 +12,7 @@ vault_sync.py schreibt das auf dem PC in den Obsidian-Vault.
 import datetime as dt
 import statistics
 
-from lib import CONFIG, Buffer, Supabase
+from lib import CONFIG, Buffer, Supabase, YouTube, regeln
 
 A = CONFIG["analyse"]
 
@@ -43,6 +43,35 @@ def metriken_aktualisieren(metriken, posts, geplant, jetzt, plattform_von_kanal=
     return metriken
 
 
+def youtube_aktualisieren(metriken, yt, geplant, jetzt):
+    """25.11.: direkt hochgeladene Shorts (weg „direkt“) über die YouTube Analytics API: Aufrufe, engagedViews
+    (nicht sofort weggewischt), durchschnittlich gesehener Anteil, Wiedergabedauer, Likes, Shares, neue Abos.
+    YouTube liefert die Zahlen mit 1 bis 2 Tagen Verzug."""
+    direkt = [g for g in geplant if g.get("weg") == "direkt" and g.get("youtube_id") and g.get("status") == "gesendet"]
+    frisch = [g for g in direkt if tag_seit(g["slot_utc"], jetzt) <= CONFIG["tracking_tage"] + 2]
+    if not frisch:
+        return 0
+    start = min(dt.datetime.fromisoformat(g["slot_utc"]) for g in frisch).date().isoformat()
+    werte = yt.analytics([g["youtube_id"] for g in frisch], start, jetzt.date().isoformat())
+    for g in frisch:
+        w = werte.get(g["youtube_id"])
+        e = metriken.setdefault("yt:" + g["youtube_id"], {"meta": {}, "verlauf": {}})
+        e["meta"] = {**{k: g.get(k) for k in ("titel", "art", "kanal", "dauer", "titel_typ", "slot", "karte_id")},
+                     "plattform": "youtube", "gesendet": g["slot_utc"], "weg": "direkt"}
+        if not w:
+            continue
+        views = w.get("views") or 0
+        tag = tag_seit(g["slot_utc"], jetzt)
+        if tag > CONFIG["tracking_tage"]:
+            continue
+        e["verlauf"][str(tag)] = {"views": views, "likes": w.get("likes"), "shares": w.get("shares"), "follows": w.get("subscribersGained"),
+                                  "totalTimeWatched": (w.get("averageViewDuration") or 0) * views,
+                                  "engagedViews": w.get("engagedViews"), "avg_prozent": w.get("averageViewPercentage"),
+                                  "wegwisch_quote": (1 - (w.get("engagedViews") or 0) / views) if views else None,
+                                  "abgerufen": jetzt.isoformat()}
+    return len(frisch)
+
+
 def kennzahlen(eintrag):
     """Views an Tag 3 (fairer Vergleich), sonst letzter Stand. Dazu Haltezeit und Engagement."""
     v = eintrag.get("verlauf", {})
@@ -57,7 +86,9 @@ def kennzahlen(eintrag):
     if haltezeit is None and letzt.get("totalTimeWatched") and letzt.get("views"):
         haltezeit = letzt["totalTimeWatched"] / letzt["views"]
     inter = sum(letzt.get(k) or 0 for k in ("likes", "comments", "shares", "saves"))
-    return {"views_d3": views, "views_letzt": letzt.get("views") or 0, "haltezeit": haltezeit,
+    if csv.get("full_watch_pct") is None and letzt.get("avg_prozent") is not None:   # YouTube direkt
+        csv = {**csv, "full_watch_pct": letzt["avg_prozent"]}
+    return {"views_d3": views, "views_letzt": letzt.get("views") or 0, "haltezeit": haltezeit, "wegwisch_quote": letzt.get("wegwisch_quote"),
             "voll_angesehen": csv.get("full_watch_pct"), "follows": letzt.get("follows") or csv.get("new_followers"),
             "engagement": inter / letzt["views"] if letzt.get("views") else None, "alter_tage": tage[-1]}
 
@@ -185,6 +216,12 @@ def main():
         print(f"{len(posts)} gesendete Posts von Buffer gelesen.")
     except SystemExit as e:
         print(f"Buffer übersprungen: {e}")
+    if regeln(sb)["youtube_weg"] == "direkt" or any(g.get("weg") == "direkt" for g in posting.get("geplant", [])):
+        try:
+            n = youtube_aktualisieren(metriken, YouTube.aus_supabase(sb), posting.get("geplant", []), jetzt)
+            print(f"YouTube Analytics: {n} direkte Shorts abgefragt.")
+        except Exception as e:  # Zahlen sind Hilfe, kein Muss
+            print(f"YouTube Analytics übersprungen: {str(e)[:200]}")
     sb.info_schreiben("metriken", metriken)
     if posting:
         sb.info_schreiben("posting", posting)

@@ -174,5 +174,31 @@
       "#edit"
     ]
   },
-  "sofort_warnung_abstand_minuten": 60
+  "sofort_warnung_abstand_minuten": 60,
+  "posten_regeln": {
+    "youtube_weg": "buffer",
+    "youtube_pro_tag": 2,
+    "versatz_stunden": {
+      "instagram": 24,
+      "youtube": 24
+    },
+    "youtube_entscheid_stunden": 18,
+    "youtube_warte_tage": 7
+  },
+  "streamer_namen": [
+    "eliasn97",
+    "rewinside",
+    "rewi",
+    "xqc",
+    "kaicenat",
+    "ishowspeed",
+    "caseoh",
+    "nooreax",
+    "montanablack",
+    "knossi",
+    "papaplatte",
+    "trymacs",
+    "zarbex",
+    "rohat"
+  ]
 }

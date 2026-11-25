@@ -1,3 +1,4 @@
+import json
 """Tests ohne Netz: python -m unittest test_automation.py"""
 import datetime as dt
 import tempfile
@@ -171,7 +172,8 @@ class PostenProbelauf(unittest.TestCase):
             posten.Supabase = alt
         z = FakeSb.gespeichert["posting"]
         self.assertEqual(z["modus"], "probelauf")
-        self.assertEqual(sorted(e["plattform"] for e in z["probelauf"]), ["instagram", "tiktok", "youtube"])
+        self.assertEqual(sorted(e["plattform"] for e in z["probelauf"]), ["instagram", "tiktok"])
+        self.assertEqual([w["karte_id"] for w in z["youtube_warte_probe"]], ["k1"])   # YouTube: Tages-Auswahl der besten
         self.assertEqual(z["erledigte_auftraege"], [])
         self.assertTrue(all(e["status"] == "probelauf" for e in z["probelauf"]))
         self.assertEqual([g["auftrag_id"] for g in z["gesperrt"]], [8])
@@ -225,6 +227,7 @@ class WunschSlots(unittest.TestCase):
             posten.main()
         finally:
             posten.Supabase = alt
+        WunschSlots.letzter_zustand = FakeSb.gespeichert["posting"]
         return FakeSb.gespeichert["posting"]["probelauf"]
 
     def test_kalender_slot_nur_gewaehlte_plattform(self):
@@ -284,7 +287,8 @@ class WunschSlots(unittest.TestCase):
         self.assertTrue(all(dt.datetime.fromisoformat(e["slot_utc"]) < frueh for e in z))
 
     def test_ohne_wunsch_alle_plattformen(self):
-        self.assertEqual(sorted(e["plattform"] for e in self._lauf("[posten]")), ["instagram", "tiktok", "youtube"])
+        self.assertEqual(sorted(e["plattform"] for e in self._lauf("[posten]")), ["instagram", "tiktok"])
+        self.assertEqual(len(WunschSlots.letzter_zustand["youtube_warte_probe"]), 1)
 
 
 class Sperren(unittest.TestCase):
@@ -397,8 +401,8 @@ class TexteImJob(unittest.TestCase):
         z = WunschSlots()._lauf("[posten] " + lib.texte_kommentar(t))
         tik = next(e for e in z if e["plattform"] == "tiktok")
         self.assertEqual(tik["text"], "Mein Hook 💀 Mein Satz. #zarbex")
-        yt = next(e for e in z if e["plattform"] == "youtube")
-        self.assertEqual(yt["metadata"]["youtube"]["title"], "Mein Hook 💀")
+        yt = WunschSlots.letzter_zustand["youtube_warte_probe"][0]
+        self.assertEqual(yt["meta"]["youtube"]["title"], "Mein Hook 💀")
 
     def test_gluecksspiel_im_bearbeiteten_text_bleibt_gesperrt(self):
         t = {"tiktok": {"titel": "Hook", "beschreibung": "Ab ins Casino", "hashtags": []}}
@@ -483,7 +487,8 @@ class Abgleich(unittest.TestCase):
         # Instagram ist noch geplant: neue Freigabe der Karte postet nur TikTok und YouTube
         r = WunschSlots()._lauf("[posten]", geplant=[{"karte_id": "k9", "plattform": "instagram", "status": "geplant",
                                                       "slot_utc": "2030-01-01T12:00:00+00:00"}])
-        self.assertEqual(sorted(e["plattform"] for e in r), ["tiktok", "youtube"])
+        self.assertEqual(sorted(e["plattform"] for e in r), ["tiktok"])
+        self.assertEqual(len(WunschSlots.letzter_zustand["youtube_warte_probe"]), 1)
 
 
 class Stopp(unittest.TestCase):
@@ -519,3 +524,136 @@ class Stopp(unittest.TestCase):
         posten.stopp_anwenden(Sb(), {"erledigte_auftraege": [], "geplant": [{"auftrag_id": 5, "status": "geplant", "buffer_id": "x"}]},
                               Buf(), False, [], jetzt)
         self.assertEqual(Buf.weg, [])                            # Probelauf löscht nie
+
+
+class VersetztUndBeste(unittest.TestCase):
+    def test_reels_einen_tag_nach_tiktok(self):
+        z = WunschSlots()._lauf("[posten]")
+        tik = next(e for e in z if e["plattform"] == "tiktok")
+        ig = next(e for e in z if e["plattform"] == "instagram")
+        self.assertGreaterEqual(dt.datetime.fromisoformat(ig["slot_utc"]) - dt.datetime.fromisoformat(tik["slot_utc"]), dt.timedelta(hours=24))
+
+    def test_nur_die_besten_auf_youtube(self):
+        import posten
+        r = lib.regeln()
+        jetzt = dt.datetime(2026, 11, 26, 7, 0, tzinfo=dt.timezone.utc)   # 08:00 Berlin, erster Slot 13:00
+        warte = [{"auftrag_id": i, "karte_id": f"k{i}", "titel": f"C{i}", "wert": w, "ab_utc": "2026-11-26T00:00:00+00:00",
+                  "erstellt": "2026-11-25T20:00:00+00:00", "teile": {"titel": f"C{i}", "beschreibung": "x", "hashtags": ["#shorts"]}}
+                 for i, w in ((1, 60), (2, 90), (3, 75))]
+        z = {"geplant": [], "youtube_warte": warte}
+        gesendet = []
+
+        def senden(w, slot):
+            gesendet.append((w["karte_id"], slot.astimezone(BER).strftime("%d %H:%M")))
+            return {"status": "geplant", "slot_utc": slot.isoformat(), "plattform": "youtube", "slot_lokal": "", "titel": w["titel"]}
+
+        posten.youtube_warte_planen(z, r, jetzt, senden, True, [])
+        self.assertEqual([k for k, _ in gesendet], ["k2", "k3"])          # die 2 besten des Tages
+        self.assertEqual([w["karte_id"] for w in z["youtube_warte"]], ["k1"])
+        self.assertEqual(gesendet[0][1], "26 13:00")
+
+    def test_zu_frueh_wird_nicht_entschieden(self):
+        import posten
+        r = lib.regeln()
+        jetzt = dt.datetime(2026, 11, 25, 12, 0, tzinfo=dt.timezone.utc)
+        z = {"geplant": [], "youtube_warte": [{"auftrag_id": 1, "karte_id": "k", "titel": "C", "wert": 50, "ab_utc": "2026-11-26T12:00:00+00:00",
+                                                "erstellt": "2026-11-25T11:00:00+00:00", "teile": {}}]}
+        posten.youtube_warte_planen(z, r, jetzt, lambda w, s: self.fail("zu früh"), True, [])
+        self.assertEqual(len(z["youtube_warte"]), 1)
+
+    def test_regeln_grenzen(self):
+        class Sb:
+            def __init__(self, w):
+                self.w = w
+
+            def info_lesen(self, k, d=None):
+                return self.w
+
+        self.assertEqual(lib.regeln(Sb({"youtube_pro_tag": 9}))["youtube_pro_tag"], 2)            # Buffer kann nur 2
+        self.assertEqual(lib.regeln(Sb({"youtube_pro_tag": 9, "youtube_weg": "direkt"}))["youtube_pro_tag"], 9)
+        self.assertEqual(lib.regeln(Sb({"youtube_pro_tag": 500, "youtube_weg": "direkt"}))["youtube_pro_tag"], 20)
+
+
+class StrikeRegel(unittest.TestCase):
+    def test_erster_pausiert_streamer_zweiter_stoppt_fanpage(self):
+        k = {"titel": "Trymacs schrottet sein Auto", "kanal": "fanpage", "art": "Fanpage-Clip", "datei": "a.mp4",
+             "checks": {"ton_sync": {"status": "gruen"}}}
+        z = dict(k, titel="Zarbex crasht")
+        eins = {"liste": [{"streamer": "trymacs"}]}
+        self.assertIn("pausiert", lib.sperrgrund(k, strikes=eins))
+        self.assertIsNone(lib.sperrgrund(z, strikes=eins))
+        zwei = {"liste": [{"streamer": "trymacs"}, {"streamer": "papaplatte"}]}
+        self.assertIn("gestoppt", lib.sperrgrund(z, strikes=zwei))
+        self.assertIsNone(lib.sperrgrund(dict(z, art="Kampagne"), strikes=zwei))
+
+
+class YouTubeDirekt(unittest.TestCase):
+    def test_upload_geplant_privat_mit_publishat(self):
+        aufrufe = []
+
+        def roh(url, methode="GET", daten=None, kopf=None, timeout=300):
+            aufrufe.append((methode, url, daten, kopf))
+            if "oauth2" in url:
+                return 200, {}, b'{"access_token": "t"}'
+            if "uploadType=resumable" in url:
+                return 200, {"Location": "https://up/1"}, b""
+            return 200, {}, b'{"id": "vid1"}'
+
+        alt = lib._roh
+        lib._roh = roh
+        try:
+            yt = lib.YouTube({"client_id": "c", "client_secret": "s", "refresh_token": "r"})
+            slot = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5)
+            teile = {"titel": "Titel 💀", "beschreibung": "Satz.\n\n🎥 Quelle", "hashtags": ["#shorts", "#trymacs"]}
+            self.assertEqual(yt.hochladen(b"mp4", teile, "20", slot), "vid1")
+        finally:
+            lib._roh = alt
+        meta = json.loads(aufrufe[1][2])
+        self.assertEqual(meta["snippet"]["title"], "Titel 💀")
+        self.assertIn("#shorts", meta["snippet"]["description"])
+        self.assertEqual(meta["snippet"]["tags"], ["shorts", "trymacs"])
+        self.assertEqual(meta["status"]["privacyStatus"], "private")
+        self.assertTrue(meta["status"]["publishAt"].endswith("Z"))
+        self.assertFalse(meta["status"]["selfDeclaredMadeForKids"])
+        self.assertEqual(aufrufe[2][0], "PUT")
+
+
+class YouTubeZahlen(unittest.TestCase):
+    def test_analytics_in_metriken(self):
+        import zahlen
+
+        class Yt:
+            def analytics(self, ids, start, ende):
+                return {"v1": {"views": 1000, "engagedViews": 700, "averageViewPercentage": 82.5, "averageViewDuration": 14,
+                               "likes": 50, "shares": 5, "subscribersGained": 3}}
+
+        jetzt = dt.datetime(2026, 11, 28, 6, 0, tzinfo=dt.timezone.utc)
+        g = [{"weg": "direkt", "youtube_id": "v1", "status": "gesendet", "slot_utc": "2026-11-26T12:00:00+00:00", "titel": "T", "plattform": "youtube"}]
+        m = {}
+        self.assertEqual(zahlen.youtube_aktualisieren(m, Yt(), g, jetzt), 1)
+        v = m["yt:v1"]["verlauf"]["2"]
+        self.assertAlmostEqual(v["wegwisch_quote"], 0.3)
+        k = zahlen.kennzahlen(m["yt:v1"])
+        self.assertEqual(k["views_d3"], 1000)
+        self.assertEqual(k["haltezeit"], 14)
+        self.assertEqual(k["voll_angesehen"], 82.5)
+
+
+class StrikeRaeumen(unittest.TestCase):
+    def test_geplante_des_streamers_werden_geloescht(self):
+        import posten
+
+        class Buf:
+            weg = []
+
+            def post_loeschen(self, i):
+                Buf.weg.append(i)
+
+        z = {"geplant": [{"status": "geplant", "buffer_id": "b1", "titel": "Trymacs crasht", "kanal": "fanpage", "art": "Fanpage-Clip"},
+                         {"status": "geplant", "buffer_id": "b2", "titel": "Zarbex crasht", "kanal": "fanpage", "art": "Fanpage-Clip"},
+                         {"status": "gesendet", "buffer_id": "b3", "titel": "Trymacs alt", "kanal": "fanpage", "art": "Fanpage-Clip"}],
+             "youtube_warte": [{"karte": {"titel": "Trymacs wartet", "art": "Fanpage-Clip"}}, {"karte": {"titel": "Eli wartet"}}]}
+        posten.strikes_raeumen(z, {"liste": [{"streamer": "trymacs"}]}, Buf(), None, True)
+        self.assertEqual(Buf.weg, ["b1"])
+        self.assertEqual([g["status"] for g in z["geplant"]], ["storniert", "geplant", "gesendet"])
+        self.assertEqual(len(z["youtube_warte"]), 1)
