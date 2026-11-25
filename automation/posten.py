@@ -12,7 +12,7 @@ import datetime as dt
 import urllib.parse
 from zoneinfo import ZoneInfo
 
-from lib import (CONFIG, Buffer, Supabase, buffer_voll, caption_bauen, format_von, live, metadata_bauen,
+from lib import (CONFIG, Buffer, Supabase, buffer_voll, caption_bauen, ist_bonus, sofort_slot, format_von, live, metadata_bauen,
                  naechster_slot, slot_pruefen, sperrgrund, titel_typ, wunsch_slots)
 
 STANDARD = {"erledigte_auftraege": [], "geplant": [], "probelauf": [], "gesperrt": [], "letzter_lauf": None}
@@ -108,6 +108,12 @@ def main():
             continue
         slots, hinweise = {}, {}
         for p in ziel:
+            if wunsch.get(p) == "sofort":   # Bonus jetzt: in wenigen Minuten, sonst nächster regulärer Slot
+                t, grund_slot = sofort_slot(zustand["geplant"] + probe, p)
+                slots[p] = t or naechster_slot(belegt[p])
+                if grund_slot:
+                    hinweise[p] = "Bonus jetzt ging nicht (" + grund_slot + "), nächster freier Slot genommen."
+                continue
             grund_slot = slot_pruefen(wunsch[p], belegt[p]) if p in wunsch else None
             slots[p] = wunsch[p] if p in wunsch and grund_slot is None else naechster_slot(belegt[p])
             if grund_slot:
@@ -118,6 +124,8 @@ def main():
             e = eintrag(a, p, slot, text, meta)
             if p in wunsch:
                 e["wunsch"] = True
+            if (wunsch.get(p) == "sofort" and not hinweise.get(p)) or ist_bonus(slot):
+                e["bonus"] = True
             if hinweise.get(p):
                 e["hinweis"] = hinweise[p]
             if not pfad:
