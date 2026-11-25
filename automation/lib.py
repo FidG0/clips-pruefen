@@ -164,6 +164,55 @@ def naechster_slot(belegt_utc, jetzt_utc=None, cfg=CONFIG):
     raise RuntimeError("Kein freier Slot in den nächsten 60 Tagen.")
 
 
+# Wunsch-Slots (25.11., Kalender in der Zentrale): steht im Kommentar der Freigabe hinter dem Marker, z. B.
+# "[posten] slot:tiktok=2026-11-26T15:00:00+00:00 slot:youtube=2026-11-26T15:00:00+00:00". Ohne slot:-Teil gilt
+# wie bisher "nächster freier Slot auf allen aktiven Plattformen" (Handyseite unverändert).
+_WUNSCH = re.compile(r"slot:([a-z]+)=(\S+)")
+
+
+def wunsch_slots(kommentar):
+    """{plattform: slot_utc (datetime)} aus dem Kommentar. Kaputte Einträge werden ignoriert."""
+    aus = {}
+    for p, wert in _WUNSCH.findall(str(kommentar or "")):
+        try:
+            t = dt.datetime.fromisoformat(wert.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if t.tzinfo is not None:
+            aus[p] = t.astimezone(dt.timezone.utc)
+    return aus
+
+
+def wunsch_kommentar(slots, cfg=CONFIG):
+    """Gegenstück zu wunsch_slots: {plattform: slot_utc} -> Kommentar mit Marker."""
+    teile = [cfg["marker"]] + [f"slot:{p}={t.astimezone(dt.timezone.utc).isoformat()}" for p, t in sorted(slots.items())]
+    return " ".join(teile)
+
+
+def slot_aus_lokal(text, cfg=CONFIG):
+    """'2026-11-26T16:00' (Berliner Zeit, wie im Kalender) -> UTC-datetime."""
+    t = dt.datetime.fromisoformat(str(text)[:16])
+    return t.replace(tzinfo=ZoneInfo(cfg["zeitzone"])).astimezone(dt.timezone.utc)
+
+
+def slot_pruefen(slot_utc, belegt_utc, jetzt_utc=None, cfg=CONFIG):
+    """None = Slot ist erlaubt. Sonst der Grund. Gleiche Regeln wie naechster_slot:
+    nur die festen Uhrzeiten, mindestens X Min Vorlauf, nicht schon belegt, höchstens N Posts pro Tag."""
+    tz = ZoneInfo(cfg["zeitzone"])
+    lokal = slot_utc.astimezone(tz)
+    if lokal.strftime("%H:%M") not in cfg["slots"]:
+        return f"{lokal.strftime('%H:%M')} ist kein Posting-Slot ({', '.join(cfg['slots'])})."
+    jetzt = (jetzt_utc or dt.datetime.now(dt.timezone.utc)).astimezone(tz)
+    if lokal < jetzt + dt.timedelta(minutes=cfg["mindest_vorlauf_minuten"]):
+        return f"Slot {lokal.strftime('%d.%m. %H:%M')} ist zu knapp oder vorbei (mind. {cfg['mindest_vorlauf_minuten']} Min Vorlauf)."
+    belegt = {dt.datetime.fromisoformat(b.replace("Z", "+00:00")).astimezone(tz) for b in belegt_utc}
+    if lokal in belegt:
+        return f"Slot {lokal.strftime('%d.%m. %H:%M')} ist schon belegt."
+    if sum(1 for b in belegt if b.date() == lokal.date()) >= cfg["max_posts_pro_tag"]:
+        return f"Am {lokal.strftime('%d.%m.')} sind schon {cfg['max_posts_pro_tag']} Posts geplant."
+    return None
+
+
 # ---------------------------------------------------------------- Caption
 def _hashtags(karte, cfg, vorhanden):
     """Reihenfolge = Wichtigkeit: Creator, Marke, Format, Rest."""

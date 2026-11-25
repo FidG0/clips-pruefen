@@ -182,7 +182,7 @@ async function zeige() {
       sb.from("info").select("wert").eq("schluessel", "auswertung").maybeSingle()]);
     const po = p?.wert || {}, au = a?.wert || {};
     const farbe = { geplant: "var(--gelb)", gesendet: "var(--gruen)", fehler: "var(--rot)", probelauf: "var(--leise)" };
-    const zeile = g => `<div class="zeile"><span><b style="color:${farbe[g.status] || "var(--leise)"}">${esc(g.status)}</b> ${esc({ tiktok: "TikTok", youtube: "YouTube", instagram: "Insta" }[g.plattform || "tiktok"] || g.plattform)} · ${esc(g.titel)}${g.fehler ? "<br><small style='color:var(--rot)'>" + esc(g.fehler) + "</small>" : ""}</span><span>${esc(g.slot_lokal)}</span></div>`;
+    const zeile = g => `<div class="zeile"><span><b style="color:${farbe[g.status] || "var(--leise)"}">${esc(g.status)}</b> ${esc({ tiktok: "TikTok", youtube: "YouTube", instagram: "Insta" }[g.plattform || "tiktok"] || g.plattform)} · ${esc(g.titel)}${g.fehler ? "<br><small style='color:var(--rot)'>" + esc(g.fehler) + "</small>" : ""}${g.hinweis ? "<br><small style='color:var(--gelb)'>" + esc(g.hinweis) + "</small>" : ""}</span><span>${esc(g.slot_lokal)}</span></div>`;
     const kommend = (po.geplant || []).filter(g => g.status !== "gesendet").slice(-20).reverse();
     const gesendet = (po.geplant || []).filter(g => g.status === "gesendet").slice(-10).reverse();
     ziel.innerHTML = `<div class="karte"><b>Modus:</b> ${po.modus === "live" ? "<span style='color:var(--gruen)'>live (Buffer)</span>" : "Probelauf, es wird nichts gepostet"}
@@ -201,7 +201,8 @@ async function zeige() {
     const { data, error } = await sb.from("auftraege").select("id,aktion,kommentar,erstellt,erledigt,ergebnis,karten(titel)").order("id", { ascending: false }).limit(40);
     if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
     const name = { behalten: "Behalten", ablehnen: "Nicht behalten", ueberarbeiten: "Überarbeiten" };
-    ziel.innerHTML = data.length ? data.map(a => { const p = (a.kommentar || "").startsWith(MARKER); const kom = p ? a.kommentar.slice(MARKER.length).trim() : a.kommentar;
+    ziel.innerHTML = data.length ? data.map(a => { const p = (a.kommentar || "").startsWith(MARKER); const w = p ? (a.kommentar.match(/slot:[a-z]+=(\S+)/) || [])[1] : null;
+      const kom = p ? a.kommentar.slice(MARKER.length).replace(/slot:[a-z]+=\S+/g, "").trim() + (w ? (" (Slot " + new Date(w).toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", hour: "2-digit", minute: "2-digit" }) + ")") : "") : a.kommentar;
       return `<div class="zeile"><span>${p ? "Posten" : name[a.aktion]}: ${esc(a.karten?.titel)}${kom ? "<br><small>„" + esc(kom) + "“</small>" : ""}</span>
       <span>${a.erledigt ? "am PC erledigt" : "wartet auf PC"}</span></div>`; }).join("") : `<p class="leer">Noch keine Entscheidungen.</p>`;
     return;
@@ -356,6 +357,42 @@ async function pruefenQueue(ziel) {
   gewaehlt = new Set();
   naechste(ziel, queue.length);
 }
+// 25.11.: Slot selbst wählen (wie der Kalender in der Zentrale). Gleiche Regeln wie automation/lib.py slot_pruefen:
+// nur 16:00/19:00/20:30 Berliner Zeit, 30 Min Vorlauf, frei auf allen drei Plattformen, max. 3 pro Tag. posten.py prüft nochmal.
+const SLOTS = ["16:00", "19:00", "20:30"], PLATTF = ["tiktok", "youtube", "instagram"], VORLAUF_MIN = 30, MAX_TAG = 3;
+let slotCache = { t: 0, geplant: [] };
+function berlinUtc(datum, hhmm) {   // "2026-11-26", "16:00" (Berliner Wanduhr) -> Date in UTC, unabhängig von der Handy-Zeitzone
+  const [y, m, d] = datum.split("-").map(Number), [h, mi] = hhmm.split(":").map(Number);
+  let t = Date.UTC(y, m - 1, d, h, mi);
+  for (let i = 0; i < 2; i++) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Berlin", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+      .formatToParts(new Date(t)).map(x => [x.type, x.value]));
+    t += Date.UTC(y, m - 1, d, h, mi) - Date.UTC(+p.year, p.month - 1, +p.day, +p.hour, +p.minute);
+  }
+  return new Date(t);
+}
+function berlinTag(date) { return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Berlin" }).format(date); }
+async function slotsFuellen() {
+  const sel = $("#slotWahl"); if (!sel) return;
+  if (Date.now() - slotCache.t > 60000) {
+    const { data } = await sb.from("info").select("wert").eq("schluessel", "posting").maybeSingle();
+    slotCache = { t: Date.now(), geplant: (data?.wert?.geplant || []).filter(g => ["geplant", "gesendet"].includes(g.status)) };
+  }
+  if (!$("#slotWahl")) return;
+  const belegt = p => new Set(slotCache.geplant.filter(g => (g.plattform || "tiktok") === p).map(g => new Date(g.slot_utc).getTime()));
+  const B = Object.fromEntries(PLATTF.map(p => [p, belegt(p)]));
+  const frueh = Date.now() + VORLAUF_MIN * 60000, opt = [];
+  for (let i = 0; i < 8 && opt.length < 12; i++) {
+    const tag = berlinTag(new Date(Date.now() + i * 86400000));
+    for (const s of SLOTS) {
+      const t = berlinUtc(tag, s);
+      const frei = t.getTime() >= frueh && PLATTF.every(p => !B[p].has(t.getTime())
+        && [...B[p]].filter(x => berlinTag(new Date(x)) === tag).length < MAX_TAG);
+      if (frei) opt.push(`<option value="${t.toISOString()}">${t.toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</option>`);
+    }
+  }
+  sel.insertAdjacentHTML("beforeend", opt.join(""));
+}
 async function naechste(ziel, gesamt) {
   ziel = ziel || $("#inhalt");
   if (ansicht !== "pruefen") return;
@@ -379,7 +416,7 @@ async function naechste(ziel, gesamt) {
         <button data-a="ueberarbeiten">Überarbeiten</button>
         <button class="ja" data-a="behalten">Behalten</button>
       </div>
-      <div class="knoepfe"><button class="posten" data-a="posten" style="grid-column:1/-1" ${sperrgrund(k) ? "disabled" : ""}>${sperrgrund(k) ? "Posten gesperrt: " + esc(sperrgrund(k)) : "Posten (nächster Slot)"}</button></div>
+      <div class="knoepfe">${sperrgrund(k) ? "" : `<select id="slotWahl" style="grid-column:1/-1" aria-label="Slot"><option value="">Nächster freier Slot (TikTok, Shorts, Reels)</option></select>`}<button class="posten" data-a="posten" style="grid-column:1/-1" ${sperrgrund(k) ? "disabled" : ""}>${sperrgrund(k) ? "Posten gesperrt: " + esc(sperrgrund(k)) : "Posten"}</button></div>
       <div class="tipp">Karte wischen: rechts behalten, links verwerfen, hoch überarbeiten.</div>
       <div class="tipp tastenhilfe">Tasten: J behalten · N verwerfen · U überarbeiten · P posten · Leertaste Play · C Notiz</div>
     </div>`;
@@ -393,6 +430,7 @@ async function naechste(ziel, gesamt) {
     p.replaceWith(v); v.id = "video";
   });
   if (queue[1]) signiert(BUCKET_VORSCHAU, vorschauPfad(queue[1]));
+  slotsFuellen();
   $("#spaeter").onclick = () => { queue.push(queue.shift()); naechste(); };
   ziel.querySelectorAll(".gruende [data-g]").forEach(b => b.onclick = () => { const g = b.dataset.g; gewaehlt.has(g) ? gewaehlt.delete(g) : gewaehlt.add(g); b.classList.toggle("an"); });
   ziel.querySelectorAll("[data-a]").forEach(b => b.onclick = () => entscheide(b.dataset.a));
@@ -408,7 +446,8 @@ async function entscheide(aktion) {
     const { data: s } = await sb.auth.getSession();
     // Gründe stehen als [gründe: ton, lang] vor der Notiz, so kann der PC sie fürs Regelwerk auslesen, ohne neue Spalte.
     const gr = gewaehlt.size ? `[gründe: ${[...gewaehlt].join(", ")}] ` : "";
-    const marker = aktion === "posten" ? MARKER + " " : "";
+    const wahl = aktion === "posten" ? ($("#slotWahl")?.value || "") : "";
+    const marker = aktion === "posten" ? MARKER + " " + (wahl ? PLATTF.map(p => `slot:${p}=${wahl}`).join(" ") + " " : "") : "";
     const echt = aktion === "posten" ? "behalten" : aktion;
     const { data, error } = await sb.from("auftraege").insert({ karte_id: k.id, aktion: echt, kommentar: (marker + gr + notiz).trim(), titel: titel || null, von: s.session.user.id }).select("id").maybeSingle();
     if (error) return toast("Fehler: " + error.message);
