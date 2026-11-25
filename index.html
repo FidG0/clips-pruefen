@@ -96,6 +96,18 @@
   #toast { position:fixed; left:50%; bottom:calc(76px + env(safe-area-inset-bottom)); transform:translateX(-50%); background:#101a2c; border:1px solid var(--cyan); box-shadow:0 0 18px rgba(37,226,255,.3); border-radius:4px; padding:10px 14px; display:flex; gap:12px; align-items:center; z-index:20; max-width:92vw; }
   .platz { aspect-ratio:9/16; max-height:60vh; width:100%; background:#000; border-radius:2px; display:grid; place-items:center; color:var(--leise); font-size:14px; border:1px solid var(--linie2); }
   @media (prefers-reduced-motion:reduce) { * { transition:none !important; animation:none !important; } }
+  .tvhuelle { position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:50; display:flex; align-items:flex-end; justify-content:center; }
+  .tvbox { background:var(--bg); border:1px solid var(--linie2); width:100%; max-width:640px; max-height:92vh; overflow:auto; padding:14px; border-radius:6px 6px 0 0; box-sizing:border-box; }
+  .tvkopf { display:flex; justify-content:space-between; gap:8px; align-items:baseline; margin-bottom:8px; }
+  .tvkopf span { font-family:var(--mono); font-size:12px; color:var(--gelb); text-align:right; }
+  .tvtabs { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin:8px 0; }
+  .tvtabs button.an { border-color:var(--cyan); color:var(--cyan); }
+  .tvlab { display:block; font-size:12px; color:var(--leise); margin:10px 0 4px; }
+  .tvbox input, .tvbox textarea { width:100%; box-sizing:border-box; font:inherit; font-size:16px; }
+  .tvbox pre { white-space:pre-wrap; font-family:inherit; font-size:13px; background:var(--karte); border:1px solid var(--linie); padding:8px; margin:0; max-height:28vh; overflow:auto; }
+  .tvwarn { font-size:13px; color:var(--gelb); margin:4px 0; }
+  .tvfehler { font-size:13px; color:var(--rot); margin:6px 0; min-height:1em; }
+  @media (min-width:700px) { .tvhuelle { align-items:center; } .tvbox { border-radius:6px; } }
 </style>
 </head>
 <body>
@@ -405,25 +417,124 @@ async function slotsFuellen() {
     }
   }
   const voll = PLATTF.filter(p => slotCache.geplant.filter(g => (g.plattform || "tiktok") === p && g.status === "geplant" && new Date(g.slot_utc) > new Date()).length >= BUFFER_MAX);
-  // 25.11.: Bonus jetzt (in ~5 Min). Regeln wie lib.sofort_slot: 1 Bonus pro Tag, 60 Min Abstand. posten.py prüft nochmal.
-  const heute = berlinTag(new Date()), bald = Date.now() + 5 * 60000;
-  const heuteG = slotCache.geplant.filter(g => berlinTag(new Date(g.slot_utc)) === heute);
-  const bonusSchon = heuteG.some(g => g.bonus || BONUS.includes(new Date(g.slot_utc).toLocaleTimeString("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })));
-  const zuNah = heuteG.find(g => Math.abs(new Date(g.slot_utc).getTime() - bald) < 60 * 60000);
-  opt.unshift(bonusSchon ? `<option disabled>⚡ Bonus jetzt: heute schon ein Bonus-Clip</option>`
-    : zuNah ? `<option disabled>⚡ Bonus jetzt: zu nah am Post um ${new Date(zuNah.slot_utc).toLocaleTimeString("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })}</option>`
-    : `<option value="sofort">⚡ Bonus jetzt sofort posten</option>`);
+  // 25.11. abends (Marvin): Bonus jetzt geht immer, Abstand und „1 Bonus pro Tag“ sind nur Hinweise (lib.sofort_warnungen).
+  opt.unshift(`<option value="sofort">⚡ Bonus jetzt sofort posten${bonusWarnungen().length ? " (mit Hinweis)" : ""}</option>`);
   if (voll.length) opt.unshift(`<option disabled>Buffer Free voll (${BUFFER_MAX} geplant): Freigabe wartet, bis ein Post raus ist</option>`);
   document.querySelectorAll("#slotWahl, select.fslot").forEach(sel => { if (!sel.dataset.gefuellt) { sel.dataset.gefuellt = "1"; sel.insertAdjacentHTML("beforeend", opt.join("")); } });
+}
+// 25.11. abends: Vorschau von Titel, Beschreibung und Hashtags je Plattform vor dem Posten, editierbar.
+// Vorschlag kommt aus info.texte_vorschlag (posten.py, gleiche Logik wie beim Posten, mit Trend-Hashtags).
+// Nur wenn Marvin etwas ändert, geht der Text als texte:<base64url JSON> im Kommentar mit (lib.texte_aus_kommentar).
+// posten.py prüft auch geänderte Texte auf Glücksspiel-Wörter und sperrt dann.
+const PNAME = { tiktok: "TikTok", youtube: "YouTube Shorts", instagram: "Instagram Reels" };
+const MAX_TAGS = { tiktok: 5, youtube: 3, instagram: 5 }, HART_TAGS = { instagram: 5 };
+let vorschlagCache = { t: 0, karten: {} };
+async function vorschlaege() {
+  if (Date.now() - vorschlagCache.t > 60000) {
+    const { data } = await sb.from("info").select("wert").eq("schluessel", "texte_vorschlag").maybeSingle();
+    vorschlagCache = { t: Date.now(), karten: data?.wert?.karten || {} };
+  }
+  return vorschlagCache.karten;
+}
+function tagsAus(t) { return (String(t || "").match(/#[^\s#.,!?;:()\[\]{}"'„“”»«]+/g) || []).filter(x => x.length > 1); }
+function textEinfach(k) {   // nur falls noch kein Vorschlag da ist: Block grob zerlegen
+  let c = String(k.caption || "").replace(/\r/g, "");
+  const yt = (/^[ \t]*youtube[ -]?shorts?[ \t]*:[ \t]*(.+)$/im.exec(c) || [])[1];
+  c = c.replace(/^[ \t]*youtube[ -]?shorts?[ \t]*:.*$/im, "");
+  const tags = [...new Set(tagsAus(c).map(x => x.toLowerCase()))];
+  c = c.replace(/^\s*titel\s*:.*$/im, "").replace(/^\s*beschreibung\s*:\s*/im, "").split("\n").filter(z => !/^(\s*#\S+)+\s*$/.test(z)).join("\n").trim();
+  return { titel: k.titel || "", yt: yt ? yt.replace(/#\S+/g, "").trim() : "", beschreibung: c, hashtags: tags };
+}
+function texteText(t, p) {   // wie lib.texte_text
+  const tags = (t.hashtags || []).map(x => "#" + String(x).trim().replace(/^#+/, "")).filter(x => x.length > 1).join(" ");
+  const b = String(t.beschreibung || "").trim(), ti = String(t.titel || "").trim();
+  if (p === "tiktok") return [ti, b.replace(/\s*\n+\s*/g, " "), tags].filter(Boolean).join(" ").slice(0, 2200);
+  return (p === "youtube" ? [b, tags] : [ti, b, tags]).filter(Boolean).join("\n\n");
+}
+function b64url(obj) {
+  const bytes = new TextEncoder().encode(JSON.stringify(obj)); let s = "";
+  bytes.forEach(b => s += String.fromCharCode(b));
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function bonusWarnungen() {   // wie lib.sofort_warnungen: nur Hinweise, keine Sperre
+  const heute = berlinTag(new Date()), t = Date.now() + 5 * 60000, aus = [];
+  const g = slotCache.geplant.filter(x => berlinTag(new Date(x.slot_utc)) === heute);
+  const nah = g.map(x => new Date(x.slot_utc).getTime()).filter(x => Math.abs(x - t) < 60 * 60000).sort((a, b) => Math.abs(a - t) - Math.abs(b - t))[0];
+  if (nah) aus.push(`Nur ${Math.round(Math.abs(nah - t) / 60000)} Min Abstand zum Post um ${new Date(nah).toLocaleTimeString("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })}. Kurz hintereinander teilen sich die Posts die Reichweite.`);
+  if (g.some(x => x.bonus || BONUS.includes(new Date(x.slot_utc).toLocaleTimeString("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })))) aus.push("Heute gibt es schon einen Bonus-Clip.");
+  if (PLATTF.some(p => g.filter(x => (x.plattform || "tiktok") === p).length >= MAX_TAG)) aus.push(`Heute sind schon ${MAX_TAG} Posts auf einer Plattform geplant oder gesendet.`);
+  return aus;
+}
+// Öffnet den Dialog. Ergebnis: null = abgebrochen, "" = ohne Änderung posten, "texte:…" = mit Marvins Texten.
+async function textVorschau(k, wahl, titelNeu) {
+  const vs = (await vorschlaege())[k.id], einfach = textEinfach(k);
+  const start = Object.fromEntries(PLATTF.map(p => {
+    const v = vs?.[p] || { titel: p === "youtube" && einfach.yt ? einfach.yt : einfach.titel, beschreibung: einfach.beschreibung, hashtags: p === "youtube" ? ["#shorts", ...einfach.hashtags] : einfach.hashtags };
+    return [p, { titel: titelNeu || v.titel || "", beschreibung: v.beschreibung || "", hashtags: (v.hashtags || []).slice(0, MAX_TAGS[p]) }];
+  }));
+  const stand = JSON.parse(JSON.stringify(start));
+  const wann = wahl === "sofort" ? "JETZT als Bonus-Clip (in etwa 5 Minuten)" : wahl ? new Date(wahl).toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "im nächsten freien Slot";
+  const warn = wahl === "sofort" ? bonusWarnungen() : [];
+  let akt = "tiktok";
+  return new Promise(fertig => {
+    const d = document.createElement("div"); d.className = "tvhuelle";
+    d.innerHTML = `<div class="tvbox" role="dialog" aria-modal="true" aria-label="Posttext prüfen">
+      <div class="tvkopf"><b>Posttext prüfen</b><span>${esc(wann)}</span></div>
+      ${warn.map(w => `<div class="tvwarn">⚠ ${esc(w)}</div>`).join("")}
+      ${vs ? "" : `<div class="tvwarn">Noch kein fertiger Vorschlag vom Posten-Job (kommt alle 15 Min). Ohne Änderung baut der Job den Text selbst, mit Trend-Hashtags.</div>`}
+      <div class="tvtabs">${PLATTF.map(p => `<button data-p="${p}">${PNAME[p]}</button>`).join("")}</div>
+      <label class="tvlab" id="tvTitelLab"></label><input id="tvTitel" maxlength="300">
+      <label class="tvlab">Beschreibung (Quelle als eigener Satz am Ende)</label><textarea id="tvBesch" rows="5"></textarea>
+      <label class="tvlab" id="tvTagLab"></label><input id="tvTags" placeholder="#trymacs #gta6">
+      <label class="tvlab">So sieht es aus</label><pre id="tvVor"></pre><div id="tvFehler" class="tvfehler"></div>
+      <div class="knoepfe3" style="grid-template-columns:1fr 2fr"><button id="tvAb">Abbrechen</button><button class="posten" id="tvOk">Wirklich öffentlich posten</button></div>
+    </div>`;
+    document.body.appendChild(d);
+    const $d = s => d.querySelector(s);
+    const lesen = () => { stand[akt] = { titel: $d("#tvTitel").value.trim(), beschreibung: $d("#tvBesch").value.trim(), hashtags: $d("#tvTags").value.split(/[\s,]+/).filter(Boolean).map(x => "#" + x.replace(/^#+/, "")) }; };
+    const zeigen = () => {
+      const t = stand[akt];
+      d.querySelectorAll(".tvtabs button").forEach(b => b.classList.toggle("an", b.dataset.p === akt));
+      $d("#tvTitelLab").textContent = akt === "youtube" ? "Titel (eigenes Titelfeld, max. 100 Zeichen)" : "Erste Zeile (Hook, " + PNAME[akt] + " hat kein Titelfeld)";
+      $d("#tvTitel").value = t.titel; $d("#tvBesch").value = t.beschreibung; $d("#tvTags").value = t.hashtags.join(" ");
+      neu();
+    };
+    const neu = () => {
+      lesen();
+      const t = stand[akt], text = texteText(t, akt);
+      const n = new Set(tagsAus(text + (akt === "youtube" ? " " + t.titel : "")).map(x => x.toLowerCase())).size;
+      $d("#tvTagLab").textContent = `Hashtags (${n}, üblich bis ${MAX_TAGS[akt]}${HART_TAGS[akt] ? ", Instagram erlaubt höchstens " + HART_TAGS[akt] : ""})`;
+      $d("#tvVor").textContent = (akt === "youtube" ? "TITEL: " + t.titel + "\n\n" : "") + text;
+      const f = [];
+      PLATTF.forEach(p => {
+        const x = stand[p], tx = texteText(x, p), m = new Set(tagsAus(tx + (p === "youtube" ? " " + x.titel : "")).map(y => y.toLowerCase())).size;
+        if (HART_TAGS[p] && m > HART_TAGS[p]) f.push(`${PNAME[p]}: ${m} Hashtags, höchstens ${HART_TAGS[p]}.`);
+        if (p === "youtube" && (!x.titel || x.titel.length > 100)) f.push("YouTube: Titel fehlt oder ist länger als 100 Zeichen.");
+        if (/^\s*(titel|beschreibung)\s*:/im.test(x.titel + "\n" + x.beschreibung)) f.push(`${PNAME[p]}: „Titel:“ oder „Beschreibung:“ steht noch im Text.`);
+      });
+      $d("#tvFehler").textContent = f.join(" ");
+      $d("#tvOk").disabled = f.length > 0;
+    };
+    const zu = wert => { d.remove(); fertig(wert); };
+    d.querySelectorAll(".tvtabs button").forEach(b => b.onclick = () => { lesen(); akt = b.dataset.p; zeigen(); });
+    ["#tvTitel", "#tvBesch", "#tvTags"].forEach(s => $d(s).oninput = neu);
+    $d("#tvAb").onclick = () => zu(null);
+    d.onclick = e => { if (e.target === d) zu(null); };
+    $d("#tvOk").onclick = () => {
+      lesen();
+      zu(JSON.stringify(stand) === JSON.stringify(start) ? "" : "texte:" + b64url(stand));
+    };
+    zeigen();
+  });
 }
 // 25.11. abends: Posten auch aus „Fertig“ (schon geprüfte Clips standen nie in der Prüf-Schlange, also gab es dort keinen Posten-Knopf)
 async function postenFertig(c, wahl, knopf) {
   if (sperrgrund(c)) return toast("Posten gesperrt: " + sperrgrund(c));
-  const wann = wahl === "sofort" ? "JETZT als Bonus-Clip (in etwa 5 Minuten)" : wahl ? new Date(wahl).toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "im nächsten freien Slot";
-  if (!confirm(`Wirklich öffentlich posten?\n\n„${c.titel}“\n\nTikTok, YouTube Shorts und Instagram Reels, ${wann}.`)) return;
+  const texte = await textVorschau(c, wahl);   // ersetzt das alte confirm: erst Text prüfen, dann bewusst posten
+  if (texte === null) return;
   knopf.disabled = true; knopf.textContent = "Wird freigegeben …";
   const { data: s } = await sb.auth.getSession();
-  const kommentar = (MARKER + " " + (wahl ? PLATTF.map(p => `slot:${p}=${wahl}`).join(" ") : "")).trim();
+  const kommentar = (MARKER + " " + (wahl ? PLATTF.map(p => `slot:${p}=${wahl}`).join(" ") : "") + " " + texte).replace(/\s+/g, " ").trim();
   const { error } = await sb.from("auftraege").insert({ karte_id: c.id, aktion: "behalten", kommentar, titel: null, von: s.session.user.id });
   if (error) { knopf.disabled = false; knopf.textContent = "Posten"; return toast("Fehler: " + error.message); }
   slotCache.t = 0; knopf.textContent = "Freigegeben ✓"; toast("Freigegeben. Buffer plant den Clip in wenigen Minuten ein.");
@@ -482,8 +593,9 @@ async function entscheide(aktion) {
     // Gründe stehen als [gründe: ton, lang] vor der Notiz, so kann der PC sie fürs Regelwerk auslesen, ohne neue Spalte.
     const gr = gewaehlt.size ? `[gründe: ${[...gewaehlt].join(", ")}] ` : "";
     const wahl = aktion === "posten" ? ($("#slotWahl")?.value || "") : "";
-    if (wahl === "sofort" && !confirm(`Jetzt als Bonus-Clip posten?\n\n„${k.titel}“\n\nGeht in etwa 5 Minuten auf TikTok, YouTube Shorts und Instagram Reels.`)) return;
-    const marker = aktion === "posten" ? MARKER + " " + (wahl ? PLATTF.map(p => `slot:${p}=${wahl}`).join(" ") + " " : "") : "";
+    const texte = aktion === "posten" ? await textVorschau(k, wahl, titel) : "";
+    if (texte === null) return;
+    const marker = aktion === "posten" ? MARKER + " " + (wahl ? PLATTF.map(p => `slot:${p}=${wahl}`).join(" ") + " " : "") + (texte ? texte + " " : "") : "";
     const echt = aktion === "posten" ? "behalten" : aktion;
     const { data, error } = await sb.from("auftraege").insert({ karte_id: k.id, aktion: echt, kommentar: (marker + gr + notiz).trim(), titel: titel || null, von: s.session.user.id }).select("id").maybeSingle();
     if (error) return toast("Fehler: " + error.message);
