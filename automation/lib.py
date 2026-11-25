@@ -184,7 +184,7 @@ def tagesgrenze(plattform, cfg=CONFIG):
     return cfg.get("plattformen", {}).get(plattform or "", {}).get("max_posts_pro_tag", cfg["max_posts_pro_tag"])
 
 
-def naechster_slot(belegt_utc, jetzt_utc=None, cfg=CONFIG, plattform=None):
+def naechster_slot(belegt_utc, jetzt_utc=None, cfg=CONFIG, plattform=None, ab_utc=None):
     """Nächster freier Slot (Slots aus config.json ohne Bonus-Slots, Berlin), der mind. X Min in der Zukunft liegt.
 
     belegt_utc: Menge von ISO-Strings (UTC) bereits geplanter Posts.
@@ -192,9 +192,11 @@ def naechster_slot(belegt_utc, jetzt_utc=None, cfg=CONFIG, plattform=None):
     tz = ZoneInfo(cfg["zeitzone"])
     jetzt = (jetzt_utc or dt.datetime.now(dt.timezone.utc)).astimezone(tz)
     frueh = jetzt + dt.timedelta(minutes=cfg["mindest_vorlauf_minuten"])
+    if ab_utc is not None and ab_utc.astimezone(tz) > frueh:   # 25.11.: versetzt posten (Reels/Shorts nach TikTok)
+        frueh = ab_utc.astimezone(tz)
     belegt = {dt.datetime.fromisoformat(b.replace("Z", "+00:00")).astimezone(tz) for b in belegt_utc}
     for tag in range(0, 60):
-        datum = (jetzt + dt.timedelta(days=tag)).date()
+        datum = (frueh + dt.timedelta(days=tag)).date()
         pro_tag = sum(1 for b in belegt if b.date() == datum)
         for s in cfg["slots"]:
             if s in cfg.get("bonus_slots", []):   # Bonus-Slot nur, wenn Marvin ihn ausdrücklich wählt
@@ -291,7 +293,7 @@ def buffer_voll(geplant, plattform, jetzt_utc=None, cfg=CONFIG):
     jetzt = jetzt_utc or dt.datetime.now(dt.timezone.utc)
     offen = 0
     for g in geplant:
-        if g.get("plattform", "tiktok") != plattform or g.get("status") != "geplant":
+        if g.get("plattform", "tiktok") != plattform or g.get("status") != "geplant" or g.get("weg") == "direkt":
             continue
         try:
             if dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00")) > jetzt:
@@ -587,10 +589,47 @@ def titel_typ(titel):
 
 
 # ---------------------------------------------------------------- Sperren vor dem Posten
-def sperrgrund(karte, cfg=CONFIG):
+# ---------------------------------------------------------------- Strike-Regel (25.11., Marvin: „ja genau so“)
+# info.strikes = {"liste": [{"karte_id", "streamer", "plattform", "zeit", "notiz"}]}. Erster Urheberrechts-Strike:
+# Clip löschen (Marvin in der App bzw. YouTube direkt per API) und diesen Streamer pausieren. Ab dem zweiten Strike:
+# keine Fanpage-Clips mehr. Aufheben nur, indem Marvin einen Eintrag in info.strikes entfernt.
+_GENERISCH = {"fanpage", "sichtung", "vod", "live", "clips", "clip", "unbekannt", ""}
+
+
+def streamer_von(karte, cfg=CONFIG):
+    """Streamer eines Clips: Kanal, wenn er ein Name ist, sonst bekannte Creator im Titel oder in der Caption."""
+    aus = set()
+    kanal = str(karte.get("kanal") or "").strip().lower()
+    if kanal not in _GENERISCH:
+        aus.add(kanal)
+    text = " ".join(str(karte.get(k) or "") for k in ("titel", "caption")).lower()
+    for c in list(cfg.get("hashtags_nach_creator", {})) + cfg.get("streamer_namen", []):
+        if re.search(r"(?<!\w)" + re.escape(c.lower()) + r"(?!\w)", text):
+            aus.add(c.lower())
+    return aus
+
+
+def strike_sperre(karte, strikes, cfg=CONFIG):
+    liste = (strikes or {}).get("liste") or []
+    if not liste:
+        return None
+    anzahl = len([x for x in liste if not x.get("zusatz")])   # ein Strike mit zwei Streamern zählt einmal
+    if anzahl >= 2 and "fanpage" in str(karte.get("art") or "").lower():
+        return f"{anzahl} Urheberrechts-Strikes: Fanpage-Clips sind gestoppt (Strike-Regel)."
+    pausiert = {str(x.get("streamer") or "").lower() for x in liste} - {""}
+    treffer = streamer_von(karte, cfg) & pausiert
+    if treffer:
+        return f"Streamer {', '.join(sorted(treffer))} nach Urheberrechts-Strike pausiert."
+    return None
+
+
+def sperrgrund(karte, cfg=CONFIG, strikes=None):
     """None = darf gepostet werden. Sonst der Grund, warum nicht (wird jeden Lauf neu geprüft).
     1) Glücksspiel nie. 2) Nur neu gerenderte Originale (Feld datei im Fach 'fertig'), nicht die alte Charge.
-    3) Ton-Sync-Ampel muss grün sein (rot, gelb oder ungeprüft = gesperrt)."""
+    3) Ton-Sync-Ampel muss grün sein (rot, gelb oder ungeprüft = gesperrt). 4) Strike-Regel (25.11.)."""
+    st = strike_sperre(karte, strikes, cfg)
+    if st:
+        return st
     s = cfg.get("sperren", {})
     c = karte.get("checks") or {}
     text = " ".join(str(karte.get(k) or "") for k in ("titel", "caption", "art", "format", "kanal", "quelle", "spiel"))
@@ -605,3 +644,127 @@ def sperrgrund(karte, cfg=CONFIG):
     if pflicht and status != pflicht:
         return f"Ton-Sync-Ampel {status or 'ungeprüft'}, gepostet wird nur bei grün."
     return None
+
+
+# ---------------------------------------------------------------- YouTube direkt (25.11.2026, Marvin: mehr als 2 pro Tag)
+# Offizieller Weg: YouTube Data API v3 videos.insert mit OAuth des Kanal-Kontos. Seit 02.11.2026 laden auch nicht
+# geprüfte API-Projekte öffentlich hoch (developers.google.com/youtube/v3/revision_history), 100 Uploads pro Tag
+# und Projekt in einem eigenen Kontingent. Zugang liegt NICHT im Repo: Supabase Storage, privater Bucket „geheim“,
+# Datei youtube.json {client_id, client_secret, refresh_token}, nur mit dem Supabase-Secret lesbar.
+# Eingerichtet wird er am PC mit cloud/youtube_einrichten.py (Marvin klickt einmal „Zulassen“).
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+YT_API = "https://www.googleapis.com/youtube/v3"
+YT_UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
+YT_ANALYTICS = "https://youtubeanalytics.googleapis.com/v2/reports"
+
+
+def _roh(url, methode="GET", daten=None, kopf=None, timeout=300):
+    """Wie _anfrage, aber gibt (status, header, bytes) zurück (für Uploads und Storage-Dateien)."""
+    req = urllib.request.Request(url, data=daten, method=methode, headers=kopf or {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} bei {url.split('?')[0]}: {e.read().decode(errors='replace')[:400]}") from None
+
+
+class YouTube:
+    def __init__(self, zugang):
+        self.zugang = zugang
+        self._token = None
+
+    @classmethod
+    def aus_supabase(cls, sb, bucket="geheim", pfad="youtube.json"):
+        _, _, roh = _roh(f"{sb.url}/storage/v1/object/{bucket}/{pfad}", kopf={**sb.kopf, "Authorization": f"Bearer {sb.key}"})
+        return cls(json.loads(roh.decode("utf-8")))
+
+    def token(self):
+        if self._token:
+            return self._token
+        daten = urllib.parse.urlencode({"client_id": self.zugang["client_id"], "client_secret": self.zugang["client_secret"],
+                                        "refresh_token": self.zugang["refresh_token"], "grant_type": "refresh_token"}).encode()
+        _, _, roh = _roh(GOOGLE_TOKEN_URL, "POST", daten, {"Content-Type": "application/x-www-form-urlencoded"}, 60)
+        self._token = json.loads(roh)["access_token"]
+        return self._token
+
+    def _kopf(self, extra=None):
+        return {"Authorization": f"Bearer {self.token()}", **(extra or {})}
+
+    def hochladen(self, video, teile, kategorie, veroeffentlichen_utc=None):
+        """Resumable Upload. veroeffentlichen_utc in der Zukunft: privat mit publishAt (YouTube veröffentlicht selbst),
+        sonst sofort öffentlich. Gibt die Video-ID zurück. Kostet 1 Einheit im Upload-Kontingent (100 pro Tag)."""
+        tags = [str(t).lstrip("#") for t in teile.get("hashtags") or [] if str(t).lstrip("#")]
+        status = {"privacyStatus": "public", "selfDeclaredMadeForKids": False, "containsSyntheticMedia": False}
+        if veroeffentlichen_utc and veroeffentlichen_utc > dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=2):
+            status.update(privacyStatus="private", publishAt=veroeffentlichen_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+        meta = {"snippet": {"title": re.sub(r"\s+", " ", teile.get("titel") or "Clip").strip()[:100],
+                            "description": texte_text(teile, "youtube")[:4900], "tags": tags[:30],
+                            "categoryId": str(kategorie or "20"), "defaultLanguage": "de"},
+                "status": status}
+        _, kopf, _ = _roh(f"{YT_UPLOAD}?uploadType=resumable&part=snippet,status", "POST", json.dumps(meta).encode(),
+                          self._kopf({"Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": "video/mp4",
+                                      "X-Upload-Content-Length": str(len(video))}), 60)
+        ziel = kopf.get("Location") or kopf.get("location")
+        if not ziel:
+            raise RuntimeError("YouTube gab keine Upload-Adresse zurück.")
+        _, _, roh = _roh(ziel, "PUT", video, self._kopf({"Content-Type": "video/mp4", "Content-Length": str(len(video))}), 600)
+        return json.loads(roh)["id"]
+
+    def loeschen(self, video_id):
+        _roh(f"{YT_API}/videos?id={urllib.parse.quote(video_id)}", "DELETE", kopf=self._kopf(), timeout=60)
+
+    def status(self, ids):
+        """{id: {'privacy', 'publishAt', 'upload'}} für bis zu 50 Videos (1 Einheit)."""
+        if not ids:
+            return {}
+        _, _, roh = _roh(f"{YT_API}/videos?part=status&id={','.join(ids[:50])}", kopf=self._kopf(), timeout=60)
+        return {v["id"]: {"privacy": v["status"].get("privacyStatus"), "publishAt": v["status"].get("publishAt"),
+                          "upload": v["status"].get("uploadStatus")} for v in json.loads(roh).get("items", [])}
+
+    def analytics(self, ids, start, ende):
+        """Zahlen je Video aus der YouTube Analytics API (eigener Kanal):
+        views, engagedViews (nicht direkt weggewischt), averageViewPercentage, averageViewDuration, likes, shares, subscribersGained."""
+        if not ids:
+            return {}
+        metriken = "views,engagedViews,averageViewPercentage,averageViewDuration,likes,shares,subscribersGained"
+        q = urllib.parse.urlencode({"ids": "channel==MINE", "startDate": start, "endDate": ende, "metrics": metriken,
+                                    "dimensions": "video", "filters": "video==" + ",".join(ids[:200]), "maxResults": 200})
+        _, _, roh = _roh(f"{YT_ANALYTICS}?{q}", kopf=self._kopf(), timeout=60)
+        d = json.loads(roh)
+        namen = [h["name"] for h in d.get("columnHeaders", [])]
+        return {z[0]: dict(zip(namen[1:], z[1:])) for z in d.get("rows", [])}
+
+
+# ---------------------------------------------------------------- Posten-Regeln aus der Zentrale (25.11.)
+REGELN_STANDARD = {"youtube_weg": "buffer", "youtube_pro_tag": 2, "versatz_stunden": {"instagram": 24, "youtube": 24},
+                   "youtube_entscheid_stunden": 18, "youtube_warte_tage": 7}
+
+
+def regeln(sb=None, cfg=CONFIG):
+    """config.json „posten_regeln“, überschrieben von info.posten_regeln (Zentrale > Einstellungen). Grenzen fest:
+    YouTube höchstens 2 pro Tag über Buffer (Buffer lehnt mehr ab), über die eigene API höchstens 20 (Kontingent 100)."""
+    r = {**REGELN_STANDARD, **cfg.get("posten_regeln", {})}
+    if sb is not None:
+        try:
+            r.update({k: v for k, v in (sb.info_lesen("posten_regeln", {}) or {}).items() if k in REGELN_STANDARD})
+        except Exception:  # noqa: BLE001
+            pass
+    r["youtube_weg"] = "direkt" if r.get("youtube_weg") == "direkt" else "buffer"
+    hoechstens = 20 if r["youtube_weg"] == "direkt" else 2
+    try:
+        r["youtube_pro_tag"] = max(0, min(hoechstens, int(r.get("youtube_pro_tag", 2))))
+    except (TypeError, ValueError):
+        r["youtube_pro_tag"] = 2
+    v = {**REGELN_STANDARD["versatz_stunden"], **(r.get("versatz_stunden") or {})}
+    r["versatz_stunden"] = {p: max(0, min(168, float(x or 0))) for p, x in v.items()}
+    return r
+
+
+def clip_wert(karte, trends=None):
+    """Rangfolge für „die besten N auf YouTube“: Punkte der Pipeline (0 bis 100), fehlen sie 50,
+    plus 3 je passendem Trend-Hashtag. Nur grüne Ton-Ampel kommt überhaupt so weit (sperrgrund)."""
+    try:
+        p = float(karte.get("punkte"))
+    except (TypeError, ValueError):
+        p = 50.0
+    return p + 3 * len(trend_tags(karte, trends))

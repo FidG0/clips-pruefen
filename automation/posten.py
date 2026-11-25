@@ -11,9 +11,10 @@ Freigabe = Auftrag mit aktion 'behalten' und Kommentar, der mit '[posten]' begin
 import datetime as dt
 import re
 import urllib.parse
+import urllib.request
 from zoneinfo import ZoneInfo
 
-from lib import (CONFIG, Buffer, Supabase, buffer_voll, ist_bonus, sofort_slot, sofort_warnungen, format_von, live, metadata_bauen,
+from lib import (CONFIG, Buffer, Supabase, YouTube, buffer_voll, clip_wert, regeln, strike_sperre, ist_bonus, sofort_slot, sofort_warnungen, format_von, live, metadata_bauen,
                  naechster_slot, slot_pruefen, sperrgrund, texte_aus_kommentar, texte_bauen, texte_pruefen, texte_text, titel_typ,
                  wunsch_slots)
 
@@ -147,7 +148,7 @@ def buffer_abgleich(zustand, buf, org_id, kanaele):
     da = buf.post_ids(org_id, ids, ["scheduled", "sending", "error", "needs_approval", "draft"])
     gesendet = buf.post_ids(org_id, ids, ["sent"], max_seiten=6)
     for g in zustand["geplant"]:
-        if g.get("status") != "geplant" or not g.get("buffer_id"):
+        if g.get("status") != "geplant" or not g.get("buffer_id") or g.get("weg") == "direkt":
             continue
         if g["buffer_id"] in gesendet:
             g["status"] = "gesendet"
@@ -156,7 +157,7 @@ def buffer_abgleich(zustand, buf, org_id, kanaele):
             print(f"geloescht {g.get('plattform')} {g.get('slot_lokal')}  {g.get('titel')}")
 
 
-def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt):
+def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt, yt=None):
     """25.11. 21:35 (Marvin: „lösche die sachen so lange aus dem kalender und buffer, bis ich sie bestätigt habe“):
     info.posten_stopp = {"bis_auftrag": N}. Freigaben mit ID <= N gelten nicht mehr (nur ein neuer Klick zählt),
     ihre noch geplanten Buffer-Posts werden gelöscht. Veröffentlichte Posts fasst das nie an. Gibt die gültigen offenen zurück."""
@@ -165,6 +166,7 @@ def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt):
     if not bis:
         return offen
     alt = [a for a in offen if a["id"] <= bis]
+    zustand["youtube_warte"] = [w for w in zustand.get("youtube_warte", []) if (w.get("auftrag_id") or 0) > bis]
     for a in alt:
         print(f"ungültig  Freigabe {a['id']} (vor dem Stopp, braucht neue Bestätigung)")
         if ist_live:
@@ -177,6 +179,16 @@ def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt):
         zeile = {"buffer_id": g.get("buffer_id"), "plattform": g.get("plattform"), "slot_lokal": g.get("slot_lokal"), "titel": g.get("titel")}
         if not ist_live or buf is None:
             zeile["status"] = "würde gelöscht (Probelauf)"
+        elif g.get("weg") == "direkt":
+            try:
+                if yt is None:
+                    raise RuntimeError("kein YouTube-Zugang")
+                yt.loeschen(g["youtube_id"])
+                g.update(status="storniert", hinweis="Stopp: auf YouTube gelöscht, wartet auf neue Bestätigung.")
+                g.pop("loeschen_offen", None)
+                zeile["status"] = "auf YouTube gelöscht"
+            except Exception as fehler:
+                zeile["status"] = "Fehler: " + str(fehler)[:160]
         elif not g.get("buffer_id"):
             g.update(status="storniert", hinweis="Stopp 25.11.: wartet auf neue Bestätigung.")
             zeile["status"] = "storniert"
@@ -198,6 +210,82 @@ def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt):
     if ergebnis:
         sb.info_schreiben("posten_stopp", {**stopp, "ergebnis": ergebnis, "gelaufen": jetzt.isoformat()})
     return [a for a in offen if a["id"] > bis]
+
+
+def strikes_raeumen(zustand, strikes, buf, yt, ist_live):
+    """Strike-Regel: noch geplante Posts gesperrter Streamer (bzw. aller Fanpage-Clips ab dem 2. Strike) löschen
+    und aus der YouTube-Warteschlange nehmen. Veröffentlichte Posts löscht Marvin in der App."""
+    if not (strikes or {}).get("liste"):
+        return
+    zustand["youtube_warte"] = [w for w in zustand.get("youtube_warte", []) if not strike_sperre(w.get("karte") or {}, strikes)]
+    for g in zustand["geplant"]:
+        if g.get("status") != "geplant":
+            continue
+        grund = strike_sperre({"titel": g.get("titel"), "kanal": g.get("kanal"), "art": g.get("art")}, strikes)
+        if not grund or not ist_live:
+            continue
+        try:
+            if g.get("weg") == "direkt":
+                if yt is None:
+                    raise RuntimeError("kein YouTube-Zugang")
+                yt.loeschen(g["youtube_id"])
+            elif g.get("buffer_id") and buf is not None:
+                buf.post_loeschen(g["buffer_id"])
+            g.update(status="storniert", hinweis="Strike-Regel: " + grund)
+            print(f"strike    {g.get('plattform')} {g.get('slot_lokal')} gelöscht  {g.get('titel')}")
+        except Exception as fehler:
+            g["hinweis"] = f"Strike-Regel: Löschen ging nicht ({str(fehler)[:120]}), bitte von Hand."
+
+
+def youtube_warte_planen(zustand, r, jetzt, senden, ist_live, probe, cfg=CONFIG):
+    """25.11. (Marvin: „auf youtube dann nur die 2 besten clips“): Freigaben ohne festen YouTube-Slot warten in
+    zustand.youtube_warte. Für jeden Tag wird erst kurz vorher entschieden (youtube_entscheid_stunden vor dem ersten
+    Slot), dann bekommen die besten nach clip_wert die freien Plätze (youtube_pro_tag), frühestens versetzt nach TikTok.
+    Wer nach youtube_warte_tagen nicht dran war, fällt raus (steht in youtube_verfallen)."""
+    tz = ZoneInfo(cfg["zeitzone"])
+    warte = zustand.setdefault("youtube_warte", [])
+    frisch = []
+    for w in warte:
+        if (jetzt - dt.datetime.fromisoformat(w["erstellt"])).total_seconds() > r["youtube_warte_tage"] * 86400:
+            zustand.setdefault("youtube_verfallen", []).append({k: w.get(k) for k in ("auftrag_id", "karte_id", "titel", "wert")})
+            zustand["youtube_verfallen"] = zustand["youtube_verfallen"][-100:]
+            print(f"youtube   verfallen  {w.get('titel')}")
+        else:
+            frisch.append(w)
+    warte[:] = frisch
+    if not warte or r["youtube_pro_tag"] <= 0:
+        return
+    alle = zustand["geplant"] + probe
+    normale = [s for s in cfg["slots"] if s not in cfg.get("bonus_slots", [])]
+    for tag in range(0, 8):
+        datum = (jetzt.astimezone(tz) + dt.timedelta(days=tag)).date()
+        h, m = map(int, normale[0].split(":"))
+        erster = dt.datetime(datum.year, datum.month, datum.day, h, m, tzinfo=tz)
+        if jetzt < erster - dt.timedelta(hours=r["youtube_entscheid_stunden"]):
+            break   # für diesen Tag wird noch nicht entschieden, vielleicht kommen bessere Clips
+        tag_belegt = {g["slot_utc"] for g in alle if g.get("plattform") == "youtube" and g.get("status") in ("geplant", "gesendet", "probelauf")
+                      and dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00")).astimezone(tz).date() == datum}
+        frei = r["youtube_pro_tag"] - len(tag_belegt)
+        tagesende = dt.datetime(datum.year, datum.month, datum.day, 23, 59, tzinfo=tz)
+        kandidaten = sorted([w for w in warte if dt.datetime.fromisoformat(w["ab_utc"]) <= tagesende], key=lambda w: -w["wert"])
+        for w in kandidaten[:max(0, frei)]:
+            belegt = {g["slot_utc"] for g in alle if g.get("plattform") == "youtube" and g.get("status") in ("geplant", "gesendet", "probelauf")}
+            tagesanfang = dt.datetime(datum.year, datum.month, datum.day, 0, 0, tzinfo=tz)
+            try:
+                slot = naechster_slot(belegt, jetzt, cfg, plattform="youtube", ab_utc=max(dt.datetime.fromisoformat(w["ab_utc"]), tagesanfang))
+            except RuntimeError:
+                continue
+            if slot.astimezone(tz).date() != datum:
+                continue
+            e = senden(w, slot)
+            warte.remove(w)
+            if ist_live:
+                zustand["geplant"].append(e)
+            else:
+                e["status"] = "probelauf"
+                probe.append(e)
+            alle = zustand["geplant"] + probe
+            print(f"youtube   {e['status']:9} {e['slot_lokal']}  {e['titel']}  (Wert {w['wert']:.0f}, beste {r['youtube_pro_tag']} des Tages)")
 
 
 def videodatei(karte):
@@ -237,6 +325,19 @@ def main():
     kanaele, org_id, buf = {}, None, None
     jetzt = dt.datetime.now(dt.timezone.utc)
     trends = sb.info_lesen("trends", None)   # vom PC (cloud_sync aus lernen/trends.json), fehlt er: nur config-Hashtags
+    r = regeln(sb)
+    CONFIG["plattformen"].setdefault("youtube", {})["max_posts_pro_tag"] = max(1, r["youtube_pro_tag"])
+    strikes = sb.info_lesen("strikes", {}) or {}
+    yt, yt_fehler = None, None
+    if r["youtube_weg"] == "direkt" and ist_live:
+        try:
+            yt = YouTube.aus_supabase(sb)
+            yt.token()
+        except Exception as fehler:   # ohne Zugang warten YouTube-Clips, nichts geht verloren
+            yt, yt_fehler = None, str(fehler)[:200]
+            print(f"YouTube direkt nicht bereit: {yt_fehler}")
+    zustand["youtube"] = {"weg": r["youtube_weg"], "pro_tag": r["youtube_pro_tag"], "bereit": yt is not None or r["youtube_weg"] != "direkt",
+                          "fehler": yt_fehler, "geprueft": jetzt.isoformat()}
     bstand = zustand.get("buffer") or {}
     try:
         alter = (jetzt - dt.datetime.fromisoformat(bstand["geprueft"])).total_seconds()
@@ -244,7 +345,7 @@ def main():
         alter = 1e9
     # Verbindungs-Status für die Kanäle-Seite der Zentrale: bei jeder Freigabe, sonst höchstens stündlich
     korrektur = (sb.info_lesen("texte_korrektur", {}) or {}).get("freigabe")
-    stopp_offen = any((g.get("status") == "geplant" or g.get("loeschen_offen")) and (g.get("auftrag_id") or 0) <= int((sb.info_lesen("posten_stopp", {}) or {}).get("bis_auftrag") or 0)
+    stopp_offen = bool((sb.info_lesen("strikes", {}) or {}).get("liste")) or any((g.get("status") == "geplant" or g.get("loeschen_offen")) and (g.get("auftrag_id") or 0) <= int((sb.info_lesen("posten_stopp", {}) or {}).get("bis_auftrag") or 0)
                       for g in zustand["geplant"])
     if ist_live and (offen or alter > 3600 or korrektur or stopp_offen):
         try:
@@ -264,7 +365,38 @@ def main():
         except Exception as fehler:   # Abgleich ist Hilfe, kein Muss
             print(f"Buffer-Abgleich nicht gelaufen: {fehler}")
 
-    offen = stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt)
+    offen = stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt, yt)
+    strikes_raeumen(zustand, strikes, buf, yt, ist_live)
+    for g in zustand["geplant"]:   # direkte YouTube-Uploads: nach der Veröffentlichungszeit gelten sie als gesendet
+        if g.get("weg") == "direkt" and g.get("status") == "geplant" and dt.datetime.fromisoformat(g["slot_utc"]) <= jetzt:
+            g["status"] = "gesendet"
+
+    def senden(e, p, slot, text, meta, teile, bucket, pfad, link_cache):
+        """Ein Post an Buffer oder (YouTube direkt) an die YouTube-API. Fehler landen im Eintrag, nichts bricht ab."""
+        if not pfad:
+            e.update(status="fehler", fehler="Keine Videodatei in Supabase (datei/vorschau fehlt).")
+            return e
+        if not ist_live:
+            return e
+        try:
+            if "link" not in link_cache:
+                gueltig = (slot - dt.datetime.now(dt.timezone.utc)).total_seconds() + CONFIG["link_gueltig_tage"] * 86400
+                link_cache["link"] = sb.signierter_link(bucket, pfad, max(gueltig, 3600))
+            if p == "youtube" and r["youtube_weg"] == "direkt":
+                if yt is None:
+                    raise RuntimeError("YouTube direkt nicht eingerichtet: " + (yt_fehler or "kein Zugang"))
+                with urllib.request.urlopen(link_cache["link"], timeout=300) as datei:
+                    video = datei.read()
+                kat = (meta or {}).get("youtube", {}).get("categoryId", "20")
+                e["youtube_id"] = yt.hochladen(video, teile, kat, slot)
+                e["weg"] = "direkt"
+            else:
+                if p not in kanaele:
+                    raise RuntimeError(f"Kein {p}-Kanal in Buffer verbunden.")
+                e["buffer_id"] = buf.post_planen(kanaele[p]["id"], text, link_cache["link"], slot, meta)["id"]
+        except Exception as fehler:  # ein Fehler blockiert nicht die anderen Plattformen/Freigaben
+            e.update(status="fehler", fehler=str(fehler)[:300])
+        return e
 
     belegt = {p: belegte_slots(zustand["geplant"], p) for p in plattformen}
     probe, gesperrt = [], []
@@ -272,13 +404,13 @@ def main():
         k = {**(a.get("karten") or {})}
         if a.get("titel"):
             k["titel"] = a["titel"]
-        grund = sperrgrund(k)
+        grund = sperrgrund(k, strikes=strikes)
         if grund:  # bleibt offen und wird jeden Lauf neu geprüft (z. B. sobald die Ton-Ampel grün ist)
             gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"), "grund": grund})
             print(f"gesperrt  {k.get('titel')}: {grund}")
             continue
         bucket, pfad = videodatei(k)
-        link = None
+        link_cache = {}
         wunsch = wunsch_slots(a.get("kommentar"))   # Kalender: nur gewählte Plattformen, je im gewählten Slot
         ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
         # 25.11.: kein Doppelpost. Ist die Karte auf einer Plattform noch geplant, entfällt diese Plattform.
@@ -305,7 +437,17 @@ def main():
             print(f"wartet   {k.get('titel')}: {voll[0]}")
             continue
         slots, hinweise = {}, {}
-        for p in ziel:
+        # 25.11. (Marvin, Idee 5): TikTok zuerst. Reels versetzt, YouTube wartet auf die Tages-Auswahl der besten.
+        reihe = sorted(ziel, key=lambda p: {"tiktok": 0}.get(p, 1))
+        warte_youtube = "youtube" in reihe and "youtube" not in wunsch
+        if warte_youtube and any(w.get("karte_id") == a["karte_id"] for w in zustand.get("youtube_warte", [])):
+            reihe.remove("youtube")   # wartet schon, kein zweites Mal
+            ziel = [p for p in ziel if p != "youtube"]
+            warte_youtube = False
+        if warte_youtube:
+            reihe.remove("youtube")
+            ziel = [p for p in ziel if p != "youtube"]
+        for p in reihe:
             if wunsch.get(p) == "sofort":   # Bonus jetzt: geht immer in wenigen Minuten raus (25.11. abends, Marvin)
                 warn = sofort_warnungen(zustand["geplant"] + probe, p)
                 slots[p] = sofort_slot(zustand["geplant"] + probe, p)[0]
@@ -313,7 +455,10 @@ def main():
                     hinweise[p] = "Bonus trotz Hinweis gepostet: " + " ".join(warn)
                 continue
             grund_slot = slot_pruefen(wunsch[p], belegt[p], plattform=p) if p in wunsch else None
-            slots[p] = wunsch[p] if p in wunsch and grund_slot is None else naechster_slot(belegt[p], plattform=p)
+            ab = None
+            if p not in wunsch and p != "tiktok" and slots.get("tiktok"):
+                ab = slots["tiktok"] + dt.timedelta(hours=r["versatz_stunden"].get(p, 0))
+            slots[p] = wunsch[p] if p in wunsch and grund_slot is None else naechster_slot(belegt[p], plattform=p, ab_utc=ab)
             if grund_slot:
                 hinweise[p] = "Wunsch-Slot ging nicht (" + grund_slot + "), nächster freier genommen."
         for p in ziel:
@@ -328,19 +473,7 @@ def main():
                 e["bonus"] = True
             if hinweise.get(p):
                 e["hinweis"] = hinweise[p]
-            if not pfad:
-                e.update(status="fehler", fehler="Keine Videodatei in Supabase (datei/vorschau fehlt).")
-            elif ist_live:
-                try:
-                    if p not in kanaele:
-                        raise RuntimeError(f"Kein {p}-Kanal in Buffer verbunden.")
-                    if link is None:
-                        letzter = max(slots.values())
-                        gueltig = (letzter - dt.datetime.now(dt.timezone.utc)).total_seconds() + CONFIG["link_gueltig_tage"] * 86400
-                        link = sb.signierter_link(bucket, pfad, gueltig)
-                    e["buffer_id"] = buf.post_planen(kanaele[p]["id"], text, link, slot, meta)["id"]
-                except Exception as fehler:  # ein Fehler blockiert nicht die anderen Plattformen/Freigaben
-                    e.update(status="fehler", fehler=str(fehler)[:300])
+            senden(e, p, slot, text, meta, teile, bucket, pfad, link_cache)
             if ist_live:
                 zustand["geplant"].append(e)
             else:
@@ -349,8 +482,37 @@ def main():
             if e["status"] in ("geplant", "probelauf"):
                 belegt[p].add(e["slot_utc"])
             print(f"{p:9} {e['status']:9} {e['slot_lokal']}  {e['titel']}")
+        if warte_youtube:
+            teile_yt = texte["youtube"][0]
+            ab_yt = (slots.get("tiktok") or jetzt) + dt.timedelta(hours=r["versatz_stunden"].get("youtube", 0))
+            w = {"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": a.get("titel") or k.get("titel"), "teile": teile_yt,
+                 "wert": clip_wert(k, trends), "ab_utc": ab_yt.isoformat(), "erstellt": jetzt.isoformat(), "bucket": bucket, "pfad": pfad,
+                 "karte": {x: k.get(x) for x in ("titel", "art", "format", "kanal", "dauer", "laenge")},
+                 "meta": metadata_bauen(k, "youtube", teile=teile_yt)}
+            if ist_live:
+                zustand.setdefault("youtube_warte", []).append(w)
+            else:
+                zustand.setdefault("_probe_warte", []).append(w)
+            print(f"youtube   wartet    ab {ab_yt.astimezone(ZoneInfo(CONFIG['zeitzone'])).strftime('%a %d.%m. %H:%M')}  {w['titel']}  (Wert {w['wert']:.0f})")
         if ist_live:
             zustand["erledigte_auftraege"].append(a["id"])
+
+    def senden_warte(w, slot):
+        auftrag = {"id": w["auftrag_id"], "karte_id": w["karte_id"], "titel": w.get("titel"), "karten": w.get("karte") or {}}
+        text = texte_text(w["teile"], "youtube")
+        e = eintrag(auftrag, "youtube", slot, text, w.get("meta"))
+        e.update(teile=w["teile"], auswahl=f"beste {r['youtube_pro_tag']} des Tages, Wert {w['wert']:.0f}")
+        return senden(e, "youtube", slot, text, w.get("meta"), w["teile"], w.get("bucket"), w.get("pfad"), {})
+
+    probe_warte = zustand.pop("_probe_warte", [])
+    if probe_warte:   # Probelauf: Warteschlange nur ansehen, nicht speichern
+        echt = zustand.get("youtube_warte", [])
+        zustand["youtube_warte"] = echt + probe_warte
+        youtube_warte_planen(zustand, r, jetzt, senden_warte, ist_live, probe)
+        zustand["youtube_warte_probe"] = [w for w in zustand["youtube_warte"] if w in probe_warte]
+        zustand["youtube_warte"] = [w for w in zustand["youtube_warte"] if w not in probe_warte]
+    else:
+        youtube_warte_planen(zustand, r, jetzt, senden_warte, ist_live, probe)
 
     try:
         texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt)
