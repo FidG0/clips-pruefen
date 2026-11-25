@@ -208,8 +208,11 @@ async function zeige() {
     return;
   }
   if (ansicht === "fertig") {   // 24.11.: neu gerenderte Originale (Bucket fertig, karten.datei), auch bei ausgeschaltetem PC
-    const { data: alle, error } = await sb.from("karten").select("*").not("datei", "is", null).order("zeit", { ascending: false });
+    const [{ data: alle, error }, { data: fr }] = await Promise.all([
+      sb.from("karten").select("*").not("datei", "is", null).order("zeit", { ascending: false }),
+      sb.from("auftraege").select("karte_id").eq("aktion", "behalten").like("kommentar", MARKER + "%")]);
     if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
+    const freigegeben = new Set((fr || []).map(a => a.karte_id));
     if (!alle.length) return ziel.innerHTML = `<p class="leer">Noch keine fertigen Clips in der Cloud. Der PC lädt sie nach und nach hoch.</p>`;
     // 24.11.: Ton-Ampel rot oder gelb = Ton defekt. Standardmäßig ausgeblendet, kommt nach grünem Neu-Render von selbst zurück.
     const tonSt = c => c.checks?.ton_sync?.status || "grau";
@@ -228,7 +231,13 @@ async function zeige() {
       <div class="titel">${esc(c.titel)}</div>
       <div class="caption">${esc(c.caption)}</div>
       <div class="knoepfe" style="grid-template-columns:1fr 1fr">${tonSt(c) === "rot" ? `<button disabled style="width:100%">Download gesperrt</button>` : `<a class="laden" data-pfad="${esc(c.datei)}" href="#"><button class="ja" style="width:100%">Herunterladen</button></a>`}
-      <button class="kopieren">Text kopieren</button></div></div>`).join("");
+      <button class="kopieren">Text kopieren</button></div>
+      ${freigegeben.has(c.id) ? `<div class="hinweis" style="color:var(--gruen)">Zum Posten freigegeben, siehe Reiter Posting.</div>`
+        : sperrgrund(c) ? `<div class="hinweis">Posten gesperrt: ${esc(sperrgrund(c))}</div>`
+        : `<div class="knoepfe"><select class="fslot" style="grid-column:1/-1" aria-label="Slot"><option value="">Nächster freier Slot (TikTok, Shorts, Reels)</option></select>
+           <button class="posten" data-fpost="${esc(c.id)}" style="grid-column:1/-1">Posten</button></div>`}</div>`).join("");
+    ziel.querySelectorAll("[data-fpost]").forEach(b => b.onclick = () => postenFertig(k.find(c => c.id === b.dataset.fpost), b.parentElement.querySelector("select.fslot")?.value || "", b));
+    slotsFuellen();
     const knopf = ziel.querySelector("#fertig-alle");
     if (knopf) knopf.onclick = () => { fertigAlle = !fertigAlle; zeige(); };
     const pfade = k.map(c => c.datei);
@@ -373,12 +382,11 @@ function berlinUtc(datum, hhmm) {   // "2026-11-26", "16:00" (Berliner Wanduhr) 
 }
 function berlinTag(date) { return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Berlin" }).format(date); }
 async function slotsFuellen() {
-  const sel = $("#slotWahl"); if (!sel) return;
+  if (!document.querySelector("#slotWahl, select.fslot")) return;
   if (Date.now() - slotCache.t > 60000) {
     const { data } = await sb.from("info").select("wert").eq("schluessel", "posting").maybeSingle();
     slotCache = { t: Date.now(), geplant: (data?.wert?.geplant || []).filter(g => ["geplant", "gesendet"].includes(g.status)) };
   }
-  if (!$("#slotWahl")) return;
   const belegt = p => new Set(slotCache.geplant.filter(g => (g.plattform || "tiktok") === p).map(g => new Date(g.slot_utc).getTime()));
   const B = Object.fromEntries(PLATTF.map(p => [p, belegt(p)]));
   const frueh = Date.now() + VORLAUF_MIN * 60000, opt = [];
@@ -391,7 +399,19 @@ async function slotsFuellen() {
       if (frei) opt.push(`<option value="${t.toISOString()}">${t.toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</option>`);
     }
   }
-  sel.insertAdjacentHTML("beforeend", opt.join(""));
+  document.querySelectorAll("#slotWahl, select.fslot").forEach(sel => { if (!sel.dataset.gefuellt) { sel.dataset.gefuellt = "1"; sel.insertAdjacentHTML("beforeend", opt.join("")); } });
+}
+// 25.11. abends: Posten auch aus „Fertig“ (schon geprüfte Clips standen nie in der Prüf-Schlange, also gab es dort keinen Posten-Knopf)
+async function postenFertig(c, wahl, knopf) {
+  if (sperrgrund(c)) return toast("Posten gesperrt: " + sperrgrund(c));
+  const wann = wahl ? new Date(wahl).toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "im nächsten freien Slot";
+  if (!confirm(`Wirklich öffentlich posten?\n\n„${c.titel}“\n\nTikTok, YouTube Shorts und Instagram Reels, ${wann}.`)) return;
+  knopf.disabled = true; knopf.textContent = "Wird freigegeben …";
+  const { data: s } = await sb.auth.getSession();
+  const kommentar = (MARKER + " " + (wahl ? PLATTF.map(p => `slot:${p}=${wahl}`).join(" ") : "")).trim();
+  const { error } = await sb.from("auftraege").insert({ karte_id: c.id, aktion: "behalten", kommentar, titel: null, von: s.session.user.id });
+  if (error) { knopf.disabled = false; knopf.textContent = "Posten"; return toast("Fehler: " + error.message); }
+  slotCache.t = 0; knopf.textContent = "Freigegeben ✓"; toast("Freigegeben. Buffer plant den Clip in wenigen Minuten ein.");
 }
 async function naechste(ziel, gesamt) {
   ziel = ziel || $("#inhalt");
