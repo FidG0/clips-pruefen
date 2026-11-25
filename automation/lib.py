@@ -139,6 +139,15 @@ class Buffer:
             raise RuntimeError(f"Buffer ändert nicht: {r.get('message') or r.get('__typename')}")
         return r["post"]
 
+    def post_loeschen(self, post_id):
+        """25.11.: geplanten Post in Buffer löschen (deletePost). Veröffentlichte Posts löscht Buffer nicht auf der Plattform."""
+        q = """mutation($i: DeletePostInput!) { deletePost(input: $i) { __typename
+                 ... on DeletePostSuccess { id } ... on VoidMutationError { message } } }"""
+        r = self.gql(q, {"i": {"id": post_id}})["deletePost"]
+        if r.get("__typename") != "DeletePostSuccess":
+            raise RuntimeError(f"Buffer löscht nicht: {r.get('message') or r}")
+        return r.get("id")
+
     def post_ids(self, org_id, kanal_ids, status, max_seiten=4):
         """25.11.: IDs aller Posts mit diesen Status (z. B. scheduled, sending, sent, error) in den Kanälen."""
         q = """query($a: String) {

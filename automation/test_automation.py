@@ -484,3 +484,38 @@ class Abgleich(unittest.TestCase):
         r = WunschSlots()._lauf("[posten]", geplant=[{"karte_id": "k9", "plattform": "instagram", "status": "geplant",
                                                       "slot_utc": "2030-01-01T12:00:00+00:00"}])
         self.assertEqual(sorted(e["plattform"] for e in r), ["tiktok", "youtube"])
+
+
+class Stopp(unittest.TestCase):
+    def test_alte_freigaben_ungueltig_und_geplante_geloescht(self):
+        import posten
+        jetzt = dt.datetime(2026, 11, 25, 20, 40, tzinfo=dt.timezone.utc)
+
+        class Sb:
+            geschrieben = {}
+
+            def info_lesen(self, k, d=None):
+                return {"bis_auftrag": 5}
+
+            def info_schreiben(self, k, w):
+                Sb.geschrieben[k] = w
+
+        class Buf:
+            weg = []
+
+            def post_loeschen(self, i):
+                Buf.weg.append(i)
+
+        z = {"erledigte_auftraege": [], "geplant": [
+            {"auftrag_id": 5, "plattform": "tiktok", "status": "geplant", "buffer_id": "b1"},
+            {"auftrag_id": 1, "plattform": "tiktok", "status": "gesendet", "buffer_id": "b0"},
+            {"auftrag_id": 9, "plattform": "tiktok", "status": "geplant", "buffer_id": "b9"}]}
+        offen = posten.stopp_anwenden(Sb(), z, Buf(), True, [{"id": 4}, {"id": 6}], jetzt)
+        self.assertEqual([a["id"] for a in offen], [6])          # nur neue Bestätigungen zählen
+        self.assertEqual(z["erledigte_auftraege"], [4])
+        self.assertEqual(Buf.weg, ["b1"])                        # gesendet und neue nie
+        self.assertEqual([g["status"] for g in z["geplant"]], ["storniert", "gesendet", "geplant"])
+        Buf.weg = []
+        posten.stopp_anwenden(Sb(), {"erledigte_auftraege": [], "geplant": [{"auftrag_id": 5, "status": "geplant", "buffer_id": "x"}]},
+                              Buf(), False, [], jetzt)
+        self.assertEqual(Buf.weg, [])                            # Probelauf löscht nie

@@ -156,6 +156,43 @@ def buffer_abgleich(zustand, buf, org_id, kanaele):
             print(f"geloescht {g.get('plattform')} {g.get('slot_lokal')}  {g.get('titel')}")
 
 
+def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt):
+    """25.11. 21:35 (Marvin: „lösche die sachen so lange aus dem kalender und buffer, bis ich sie bestätigt habe“):
+    info.posten_stopp = {"bis_auftrag": N}. Freigaben mit ID <= N gelten nicht mehr (nur ein neuer Klick zählt),
+    ihre noch geplanten Buffer-Posts werden gelöscht. Veröffentlichte Posts fasst das nie an. Gibt die gültigen offenen zurück."""
+    stopp = sb.info_lesen("posten_stopp", {}) or {}
+    bis = int(stopp.get("bis_auftrag") or 0)
+    if not bis:
+        return offen
+    alt = [a for a in offen if a["id"] <= bis]
+    for a in alt:
+        print(f"ungültig  Freigabe {a['id']} (vor dem Stopp, braucht neue Bestätigung)")
+        if ist_live:
+            zustand["erledigte_auftraege"].append(a["id"])
+    ergebnis = []
+    for g in zustand["geplant"]:
+        if (g.get("auftrag_id") or 0) > bis or g.get("status") != "geplant":
+            continue
+        zeile = {"buffer_id": g.get("buffer_id"), "plattform": g.get("plattform"), "slot_lokal": g.get("slot_lokal"), "titel": g.get("titel")}
+        if not ist_live or buf is None:
+            zeile["status"] = "würde gelöscht (Probelauf)"
+        elif not g.get("buffer_id"):
+            g.update(status="storniert", hinweis="Stopp 25.11.: wartet auf neue Bestätigung.")
+            zeile["status"] = "storniert"
+        else:
+            try:
+                buf.post_loeschen(g["buffer_id"])
+                g.update(status="storniert", hinweis="Stopp 25.11.: in Buffer gelöscht, wartet auf neue Bestätigung.")
+                zeile["status"] = "in Buffer gelöscht"
+            except Exception as fehler:   # z. B. schon von Marvin gelöscht: dann ist er weg, Abgleich setzt ihn auf geloescht
+                zeile["status"] = "Fehler: " + str(fehler)[:160]
+        ergebnis.append(zeile)
+        print(f"stopp     {g.get('plattform')} {g.get('slot_lokal')} {zeile['status']}  {g.get('titel')}")
+    if ergebnis:
+        sb.info_schreiben("posten_stopp", {**stopp, "ergebnis": ergebnis, "gelaufen": jetzt.isoformat()})
+    return [a for a in offen if a["id"] > bis]
+
+
 def videodatei(karte):
     """(bucket, pfad): Original aus 'fertig' bevorzugt, sonst Vorschau."""
     if karte.get("datei"):
@@ -200,7 +237,9 @@ def main():
         alter = 1e9
     # Verbindungs-Status für die Kanäle-Seite der Zentrale: bei jeder Freigabe, sonst höchstens stündlich
     korrektur = (sb.info_lesen("texte_korrektur", {}) or {}).get("freigabe")
-    if ist_live and (offen or alter > 3600 or korrektur):
+    stopp_offen = any(g.get("status") == "geplant" and (g.get("auftrag_id") or 0) <= int((sb.info_lesen("posten_stopp", {}) or {}).get("bis_auftrag") or 0)
+                      for g in zustand["geplant"])
+    if ist_live and (offen or alter > 3600 or korrektur or stopp_offen):
         try:
             buf = Buffer()
             org_id, kanaele = buf.kanaele(CONFIG["buffer_kanal_name"])
@@ -217,6 +256,8 @@ def main():
             buffer_abgleich(zustand, buf, org_id, kanaele)
         except Exception as fehler:   # Abgleich ist Hilfe, kein Muss
             print(f"Buffer-Abgleich nicht gelaufen: {fehler}")
+
+    offen = stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt)
 
     belegt = {p: belegte_slots(zustand["geplant"], p) for p in plattformen}
     probe, gesperrt = [], []
