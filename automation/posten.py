@@ -35,10 +35,15 @@ def offene_freigaben(sb, erledigt):
 
 
 def texte_fuer(auftrag, karte, plattform, trends):
-    """Marvins Text aus der Vorschau (texte: im Kommentar) oder der Vorschlag. Dazu der Sperrgrund oder None."""
-    teile = texte_aus_kommentar(auftrag.get("kommentar")).get(plattform) or \
-        texte_bauen(karte, plattform, trends=trends, titel_gesetzt=bool(auftrag.get("titel")))
-    return teile, texte_pruefen(teile, plattform)
+    """Marvins Text aus der Vorschau (texte: im Kommentar) oder der Vorschlag. Dazu der Sperrgrund oder None.
+    Marvins Text wird voll geprüft. Beim Vorschlag sperrt nur Glücksspiel (neue Sperre auf den fertigen Text),
+    kleinere Mängel (z. B. leerer YouTube-Titel) laufen wie bisher mit Ersatz („Clip“) durch."""
+    eigen = texte_aus_kommentar(auftrag.get("kommentar")).get(plattform)
+    teile = eigen or texte_bauen(karte, plattform, trends=trends, titel_gesetzt=bool(auftrag.get("titel")))
+    grund = texte_pruefen(teile, plattform)
+    if grund and not eigen and "Glücksspiel" not in grund:
+        grund = None
+    return teile, grund
 
 
 def vorschlaege_schreiben(sb, trends, plattformen):
@@ -111,9 +116,16 @@ def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt
             zeile["status"] = "gesperrt: " + sperre
         elif darf:
             try:
-                buf.post_bearbeiten(g["buffer_id"], neu, meta)
+                antwort = buf.post_bearbeiten(g["buffer_id"], neu, meta) or {}
                 g.update(text=neu, metadata=meta, teile=teile, titel=teile.get("titel"), hinweis="Text am 25.11. korrigiert.")
                 zeile["status"] = "korrigiert"
+                try:   # Buffer-Doku: dueAt weglassen = unverändert. Hier nachgeprüft statt geglaubt.
+                    neu_due = dt.datetime.fromisoformat(str(antwort.get("dueAt")).replace("Z", "+00:00"))
+                    if abs((neu_due - slot).total_seconds()) > 60:
+                        zeile["status"] = f"korrigiert, ABER Uhrzeit geändert auf {neu_due.isoformat()}"
+                        g["hinweis"] = "Text korrigiert, Buffer meldet neue Uhrzeit: bitte in Buffer prüfen."
+                except (TypeError, ValueError):
+                    pass
             except Exception as fehler:   # bleibt alt, nächster Lauf versucht es nochmal
                 zeile["status"] = "Fehler: " + str(fehler)[:200]
         else:
@@ -121,7 +133,7 @@ def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt
         (ergebnis if darf else vorschau).append(zeile)
         print(f"korrektur {pf:9} {zeile['status']}  {g.get('slot_lokal')}  {teile.get('titel')}")
     if darf:
-        fertig = all(z["status"] != "Vorschau (wartet auf Freigabe)" and not z["status"].startswith("Fehler") for z in ergebnis)
+        fertig = all(not z["status"].startswith("Fehler") for z in ergebnis)
         sb.info_schreiben("texte_korrektur", {**auftrag, "freigabe": not fertig, "ergebnis": ergebnis,
                                               "gelaufen": jetzt.isoformat()})
     else:
@@ -195,16 +207,16 @@ def main():
             gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"), "grund": grund})
             print(f"gesperrt  {k.get('titel')}: {grund}")
             continue
-        texte = {p: texte_fuer(a, k, p, trends) for p in plattformen}
+        bucket, pfad = videodatei(k)
+        link = None
+        wunsch = wunsch_slots(a.get("kommentar"))   # Kalender: nur gewählte Plattformen, je im gewählten Slot
+        ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
+        texte = {p: texte_fuer(a, k, p, trends) for p in ziel}
         sperre_text = next((f"{p}: {g}" for p, (_, g) in texte.items() if g), None)
         if sperre_text:   # z. B. Glücksspiel-Wort in Marvins geändertem Text: bleibt offen, wird nie so gepostet
             gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"), "grund": "Text " + sperre_text})
             print(f"gesperrt  {k.get('titel')}: Text {sperre_text}")
             continue
-        bucket, pfad = videodatei(k)
-        link = None
-        wunsch = wunsch_slots(a.get("kommentar"))   # Kalender: nur gewählte Plattformen, je im gewählten Slot
-        ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
         voll = [g for g in (buffer_voll(zustand["geplant"], p) for p in ziel) if g]
         if voll:   # Buffer Free: max. 10 geplante je Kanal. Freigabe bleibt offen, nächster Lauf versucht es wieder.
             gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"), "grund": voll[0]})
