@@ -1,12 +1,18 @@
 {
   "zeitzone": "Europe/Berlin",
   "slots": [
+    "13:00",
     "16:00",
     "19:00",
-    "20:30"
+    "20:30",
+    "22:00"
   ],
+  "bonus_slots": [
+    "22:00"
+  ],
+  "buffer_max_geplant": 10,
   "mindest_vorlauf_minuten": 30,
-  "max_posts_pro_tag": 3,
+  "max_posts_pro_tag": 5,
   "buffer_kanal_name": "clipwreck",
   "marker": "[posten]",
   "storage_bucket": "vorschau",

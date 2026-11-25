@@ -2,7 +2,7 @@
 
 Ablauf:
 1. Handyseite: Knopf **Posten (nächster Slot)** auf einer Karte. Gespeichert als Auftrag `behalten` mit Kommentar `[posten] …`, der PC verarbeitet ihn also wie bisher als Behalten.
-2. GitHub Actions `posten.yml` (alle 15 Min, läuft ohne PC): plant den Clip über die Buffer-API auf allen aktiven Plattformen (`plattformen` in `config.json`) in den nächsten freien Slot 16:00 / 19:00 / 20:30 Uhr (Berlin), max. 3 pro Tag, mit Caption + Hashtags (`config.json`). Video geht als signierter Supabase-Link (14 Tage gültig) an Buffer.
+2. GitHub Actions `posten.yml` (alle 15 Min, läuft ohne PC): plant den Clip über die Buffer-API auf allen aktiven Plattformen (`plattformen` in `config.json`) in den nächsten freien Slot 13:00 / 16:00 / 19:00 / 20:30 Uhr (Berlin), plus Bonus 22:00 nur auf Wunsch, max. 5 pro Tag; Buffer Free plant höchstens 10 je Kanal voraus, mit Caption + Hashtags (`config.json`). Video geht als signierter Supabase-Link (14 Tage gültig) an Buffer.
 3. GitHub Actions `zahlen.yml` (täglich 06:15): holt Zahlen von Buffer, verfolgt jeden Post 10 Tage, wertet nach Format, Länge, Titeltyp, Uhrzeit, Creator aus und passt `regelwerk_auto` an (Gewichte 0,3-3,0, max. ±0,2 pro Tag, erst ab 4 Posts pro Gruppe).
 4. PC: `vault_sync.py` schreibt alles in `Business-Vault/TikTok-Analyse/` (Auswertung, Tageswerte, Entscheidungen mit Datum + Grund) und `Clips-Pipeline/analyse/regelwerk_auto.json`.
 5. Fallback: `csv_import.py` liest TikTok-Studio-Exporte aus `Clips-Pipeline/analyse/csv_eingang/` (Haltezeit, ganz angesehen, neue Follower).
@@ -34,7 +34,7 @@ Eine "Posten"-Freigabe wird nur geplant, wenn alles drei stimmt, sonst steht sie
 1. Kein Glücksspiel (Wortliste `sperren.gluecksspiel_woerter` in config.json oder `checks.gluecksspiel = true`).
 2. Neu gerendertes Original vorhanden (`karten.datei` im Fach `fertig`). Alte Charge ohne Original bleibt gesperrt.
 3. Ton-Sync-Ampel grün (`karten.checks.ton_sync.status == "gruen"`). Gelb, rot oder ungeprüft bleibt gesperrt.
-Die Handyseite zeigt den Grund direkt am Posten-Knopf. Slots 16:00/19:00/20:30, also höchstens 3 Posts pro Tag und Plattform.
+Die Handyseite zeigt den Grund direkt am Posten-Knopf. Slots 13:00/16:00/19:00/20:30 plus Bonus 22:00, also höchstens 5 Posts pro Tag und Plattform.
 
 ## Wer startet die Jobs (seit 24.11.2026)
 GitHub-Zeitpläne (cron) liefen in diesem Repo nie. Deshalb startet Supabase die Workflows per `workflow_dispatch`:

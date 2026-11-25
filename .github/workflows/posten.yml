@@ -1,5 +1,5 @@
 name: Posten (Freigaben -> Buffer)
-# Sofort bei jeder "Posten"-Freigabe und zusätzlich alle 15 Minuten: Freigaben in den nächsten Slot (16:00/19:00/20:30) planen.
+# Sofort bei jeder "Posten"-Freigabe und zusätzlich alle 15 Minuten: Freigaben in den nächsten Slot (13:00/16:00/19:00/20:30, Bonus 22:00 nur auf Wunsch) planen.
 # Ohne Secret BUFFER_LIVE=ja nur Probelauf. Gesperrt bleibt: Ton-Ampel nicht grün, alte Charge ohne Original, Glücksspiel.
 # Gestartet von Supabase (pg_cron + Trigger auf auftraege, Funktion public.github_dispatch), GitHub-Zeitpläne feuerten in diesem Repo nie.
 on:
