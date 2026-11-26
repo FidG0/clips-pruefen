@@ -710,10 +710,21 @@ def strike_sperre(karte, strikes, cfg=CONFIG):
     return None
 
 
+def ist_test(karte):
+    """Test-Karte: Feld test/nicht_posten, oder Titel bzw. ein Hinweis beginnt mit „TEST“ (Hinweise kommen sicher in Supabase an)."""
+    if karte.get("test") or karte.get("nicht_posten"):
+        return True
+    if re.match(r"\s*TEST\b", str(karte.get("titel") or "")):
+        return True
+    return any(re.match(r"\s*TEST\b", str(h)) for h in (karte.get("hinweise") or []))
+
+
 def sperrgrund(karte, cfg=CONFIG, strikes=None):
     """None = darf gepostet werden. Sonst der Grund, warum nicht (wird jeden Lauf neu geprüft).
     1) Glücksspiel nie. 2) Nur neu gerenderte Originale (Feld datei im Fach 'fertig'), nicht die alte Charge.
     3) Ton-Sync-Ampel muss grün sein (rot, gelb oder ungeprüft = gesperrt). 4) Strike-Regel (25.11.)."""
+    if ist_test(karte):   # 26.11.: Test-Clips (z. B. Gegencheck „von der KI fälschlich gewählt“) nie posten, egal was sonst grün ist
+        return "TEST-Clip, wird nie gepostet."
     st = strike_sperre(karte, strikes, cfg)
     if st:
         return st

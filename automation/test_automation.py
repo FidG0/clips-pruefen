@@ -310,6 +310,13 @@ class Sperren(unittest.TestCase):
         self.assertIn("Glücksspiel", lib.sperrgrund({**self.ok, "checks": {"ton_sync": {"status": "gruen"}, "gluecksspiel": True}}))
         self.assertIsNone(lib.sperrgrund({**self.ok, "titel": "Steakhouse Chaos"}))
 
+    def test_test_clips_nie_posten(self):   # 26.11.: Gegencheck-Clips im Prüffach
+        for k in ({"test": True}, {"nicht_posten": True}, {"titel": "TEST KI-Fehlgriff: Jynxzi"},
+                  {"hinweise": ["TEST: von der KI fälschlich gewählt"]}):
+            self.assertIn("TEST", lib.sperrgrund({**self.ok, **k}), k)
+        self.assertIsNone(lib.sperrgrund({**self.ok, "titel": "Testfahrt endet im Pool"}))
+        self.assertIsNone(lib.sperrgrund({**self.ok, "hinweise": ["Caption testen"]}))
+
 
 class Zuruecknehmen(unittest.TestCase):
     """25.11.: „Doch schlecht“ und „×“ dürfen nur Geplantes löschen und nie etwas posten."""
