@@ -10,6 +10,7 @@
 <link rel="apple-touch-icon" href="icons/clipwreck-180.png">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-title" content="Clipwreck">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#05070d">
 <meta property="og:title" content="Clipwreck">
@@ -847,6 +848,10 @@ start();
 </script>
 <!-- Lernen (25.11.2026): Fragen zu Clips und Pointe-Knopf, eigene Datei lernen.js. Schreibt nur in lern_antworten. -->
 <script src="lernen.js"></script>
+<script>
+// 26.11.2026: Service Worker für „App installieren“ (Samsung/Chrome). Netz zuerst, siehe sw.js.
+if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+</script>
 
 </body>
 </html>

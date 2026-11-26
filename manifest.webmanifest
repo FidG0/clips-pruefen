@@ -1,14 +1,19 @@
 {
+  "id": "/clips-pruefen/",
   "name": "Clipwreck",
   "short_name": "Clipwreck",
+  "description": "Clips prüfen, freigeben und Posting im Blick, auch wenn der PC aus ist.",
+  "lang": "de",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#0c0b0e",
-  "theme_color": "#0c0b0e",
+  "theme_color": "#05070d",
   "icons": [
-    { "src": "icons/clipwreck-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icons/clipwreck-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "icons/clipwreck-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "icons/clipwreck-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/clipwreck-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/clipwreck-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/clipwreck-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
