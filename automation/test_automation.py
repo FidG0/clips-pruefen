@@ -311,6 +311,116 @@ class Sperren(unittest.TestCase):
         self.assertIsNone(lib.sperrgrund({**self.ok, "titel": "Steakhouse Chaos"}))
 
 
+class Zuruecknehmen(unittest.TestCase):
+    """25.11.: „Doch schlecht“ und „×“ dürfen nur Geplantes löschen und nie etwas posten."""
+
+    class Buf:
+        def __init__(self, kaputt=()):
+            self.geloescht, self.kaputt = [], set(kaputt)
+
+        def post_loeschen(self, pid):
+            if pid in self.kaputt:
+                raise RuntimeError("Buffer down")
+            self.geloescht.append(pid)
+
+    class Sb:
+        def __init__(self):
+            self.status = {}
+
+        def karte_status(self, kid, s):
+            self.status[kid] = s
+
+    def geplant(self):
+        return {"geplant": [
+            {"auftrag_id": 5, "karte_id": "k1", "plattform": "tiktok", "status": "gesendet", "buffer_id": "b0"},
+            {"auftrag_id": 6, "karte_id": "k1", "plattform": "tiktok", "status": "geplant", "buffer_id": "b1"},
+            {"auftrag_id": 6, "karte_id": "k1", "plattform": "youtube", "status": "geplant", "buffer_id": "b2"},
+            {"auftrag_id": 6, "karte_id": "k2", "plattform": "tiktok", "status": "geplant", "buffer_id": "b3"},
+            {"auftrag_id": 20, "karte_id": "k1", "plattform": "instagram", "status": "geplant", "buffer_id": "b4"}]}
+
+    def test_doch_schlecht_loescht_nur_geplantes_dieser_karte(self):
+        import posten
+        z, buf, sb = self.geplant(), self.Buf(), self.Sb()
+        fertig, sperren = posten.rueckzuege_anwenden([{"id": 10, "karte_id": "k1", "kommentar": "[zurueckziehen] Ende 2 s länger"}], z, buf, True)
+        self.assertEqual(buf.geloescht, ["b1", "b2"])   # b0 gesendet, b3 andere Karte, b4 spätere Freigabe
+        st = [g["status"] for g in z["geplant"]]
+        self.assertEqual(st, ["gesendet", "storniert", "storniert", "geplant", "geplant"])
+        self.assertIn("schon veröffentlicht", z["geplant"][0]["hinweis"])
+        self.assertEqual(fertig, [10])
+        self.assertEqual(posten.gesperrte_plattformen({"id": 9, "karte_id": "k1"}, sperren), "alle")
+        self.assertIsNone(posten.gesperrte_plattformen({"id": 11, "karte_id": "k1"}, sperren))   # „Nochmal“ danach bleibt gültig
+
+    def test_rausnehmen_einzelne_plattform(self):
+        import posten
+        z, buf, sb = self.geplant(), self.Buf(), self.Sb()
+        fertig, sperren = posten.rueckzuege_anwenden([{"id": 10, "karte_id": "k1", "kommentar": "[rausnehmen] nur:youtube"}], z, buf, True)
+        self.assertEqual(buf.geloescht, ["b2"])
+        self.assertEqual(sb.status, {})   # Karte bleibt postbar
+        self.assertEqual(posten.gesperrte_plattformen({"id": 9, "karte_id": "k1"}, sperren), {"youtube"})
+
+    def test_buffer_fehler_bleibt_offen(self):
+        import posten
+        z, buf = self.geplant(), self.Buf(kaputt={"b1"})
+        fertig, _ = posten.rueckzuege_anwenden([{"id": 10, "karte_id": "k1", "kommentar": "[rausnehmen]"}], z, buf, True)
+        self.assertEqual(fertig, [])
+        self.assertEqual(z["geplant"][1]["status"], "geplant")
+        self.assertIn("Löschen ging nicht", z["geplant"][1]["hinweis"])
+
+    def test_probelauf_loescht_nichts(self):
+        import posten
+        z, buf, sb = self.geplant(), self.Buf(), self.Sb()
+        posten.rueckzuege_anwenden([{"id": 10, "karte_id": "k1", "kommentar": "[zurueckziehen]"}], z, buf, False)
+        self.assertEqual(buf.geloescht, [])
+        self.assertEqual(sb.status, {})
+
+    def test_job_plant_zurueckgenommene_freigabe_nicht(self):
+        import os
+        import posten
+
+        class FakeSb:
+            gespeichert = {}
+
+            def info_lesen(self, k, d=None):
+                return {}
+
+            def info_schreiben(self, k, w):
+                FakeSb.gespeichert[k] = w
+
+            def holen(self, t, q):
+                karte = {"titel": "NPC fährt gegen Laterne", "kanal": "Zarbex", "datei": "a.mp4", "checks": {"ton_sync": {"status": "gruen"}}}
+                if "or=" in q:
+                    return [{"id": 8, "karte_id": "k1", "kommentar": "[zurueckziehen]"}, {"id": 9, "karte_id": "k2", "kommentar": "[rausnehmen] nur:tiktok,youtube"},
+                            {"id": 99, "karte_id": "k3", "kommentar": "[posten]"}]
+                return [{"id": 7, "karte_id": "k1", "kommentar": "[posten]", "titel": None, "karten": karte},
+                        {"id": 6, "karte_id": "k2", "kommentar": "[posten]", "titel": None, "karten": karte},
+                        {"id": 12, "karte_id": "k1", "kommentar": "[posten]", "titel": None, "karten": karte}]
+
+        alt = posten.Supabase
+        posten.Supabase = FakeSb
+        os.environ.pop("BUFFER_LIVE", None)
+        try:
+            posten.main()
+        finally:
+            posten.Supabase = alt
+        p = FakeSb.gespeichert["posting"]["probelauf"]
+        paare = {(e["auftrag_id"], e["plattform"]) for e in p}
+        self.assertFalse(any(a == 7 for a, _ in paare))                      # vor dem Zurückziehen freigegeben: verfällt
+        self.assertEqual({pl for a, pl in paare if a == 6}, {"instagram"})   # „×“ nur:tiktok,youtube
+        self.assertIn((12, "tiktok"), paare)                                 # neue Freigabe danach gilt wieder
+
+    def test_sperre_abgelehnt(self):
+        ok = {"titel": "NPC fährt gegen Laterne", "datei": "x.mp4", "checks": {"ton_sync": {"status": "gruen"}}}
+        self.assertIn("Abgelehnt", lib.sperrgrund({**ok, "status": "abgelehnt"}))
+        self.assertIsNone(lib.sperrgrund({**ok, "status": "fertig"}))
+
+    def test_marker(self):
+        self.assertEqual(lib.rueckzug_art("[zurueckziehen] [gründe: x]"), "schlecht")
+        self.assertEqual(lib.rueckzug_art("[rausnehmen] nur:tiktok"), "raus")
+        self.assertIsNone(lib.rueckzug_art("[posten]"))
+        self.assertEqual(lib.rueckzug_plattformen("[rausnehmen] nur:tiktok,youtube"), {"tiktok", "youtube"})
+        self.assertIsNone(lib.rueckzug_plattformen("[rausnehmen]"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

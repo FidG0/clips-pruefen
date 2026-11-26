@@ -195,8 +195,8 @@ async function zeige() {
       sb.from("info").select("wert").eq("schluessel", "auswertung").maybeSingle()]);
     const po = p?.wert || {}, au = a?.wert || {};
     const farbe = { geplant: "var(--gelb)", gesendet: "var(--gruen)", fehler: "var(--rot)", probelauf: "var(--leise)" };
-    const zeile = g => `<div class="zeile"><span><b style="color:${farbe[g.status] || "var(--leise)"}">${esc(g.status)}</b> ${esc({ tiktok: "TikTok", youtube: "YouTube", instagram: "Insta" }[g.plattform || "tiktok"] || g.plattform)} · ${esc(g.titel)}${g.fehler ? "<br><small style='color:var(--rot)'>" + esc(g.fehler) + "</small>" : ""}${g.hinweis ? "<br><small style='color:var(--gelb)'>" + esc(g.hinweis) + "</small>" : ""}</span><span>${esc(g.slot_lokal)}</span></div>`;
-    const kommend = (po.geplant || []).filter(g => g.status !== "gesendet").slice(-20).reverse();
+    const zeile = g => `<div class="zeile"><span><b style="color:${farbe[g.status] || "var(--leise)"}">${esc(g.status)}</b> ${esc({ tiktok: "TikTok", youtube: "YouTube", instagram: "Insta" }[g.plattform || "tiktok"] || g.plattform)} · ${esc(g.titel)}${g.fehler ? "<br><small style='color:var(--rot)'>" + esc(g.fehler) + "</small>" : ""}${g.hinweis ? "<br><small style='color:var(--gelb)'>" + esc(g.hinweis) + "</small>" : ""}</span><span>${esc(g.slot_lokal)}${g.status === "geplant" && g.karte_id ? ` <button class="klein" data-h2raus="${esc(g.karte_id)}" data-h2plat="${esc(g.plattform || "tiktok")}" title="Diesen Post aus dem Plan nehmen">×</button>` : ""}</span></div>`;
+    const kommend = (po.geplant || []).filter(g => !["gesendet", "storniert"].includes(g.status)).slice(-20).reverse();
     const gesendet = (po.geplant || []).filter(g => g.status === "gesendet").slice(-10).reverse();
     ziel.innerHTML = `<div class="karte"><b>Modus:</b> ${po.modus === "live" ? "<span style='color:var(--gruen)'>live (Buffer)</span>" : "Probelauf, es wird nichts gepostet"}
         ${po.letzter_lauf ? "<br><small style='color:var(--leise)'>Letzter Lauf: " + new Date(po.letzter_lauf).toLocaleString("de-DE") + "</small>" : ""}</div>`
@@ -221,11 +221,17 @@ async function zeige() {
     return;
   }
   if (ansicht === "fertig") {   // 24.11.: neu gerenderte Originale (Bucket fertig, karten.datei), auch bei ausgeschaltetem PC
-    const [{ data: alle, error }, { data: fr }] = await Promise.all([
+    const [{ data: alle0, error }, { data: fr }, { data: rz }] = await Promise.all([
       sb.from("karten").select("*").not("datei", "is", null).order("zeit", { ascending: false }),
-      sb.from("auftraege").select("karte_id").eq("aktion", "behalten").like("kommentar", MARKER + "%")]);
+      sb.from("auftraege").select("id,karte_id").eq("aktion", "behalten").like("kommentar", MARKER + "%"),
+      sb.from("auftraege").select("id,karte_id,kommentar,erstellt").or("kommentar.like.[zurueckziehen]*,kommentar.like.[rausnehmen]*")]);
     if (error) return ziel.innerHTML = `<p class="fehler">${esc(error.message)}</p>`;
-    const freigegeben = new Set((fr || []).map(a => a.karte_id));
+    // 26.11.: „Überarbeiten“ und „×“ heben ältere Freigaben auf (nur „×“ auf allen Plattformen); ein zum Überarbeiten zurückgezogener Clip ist weg, bis die neue Fassung hochgeladen ist
+    const zurueck = {}, schlecht = {};
+    (rz || []).forEach(a => { const k = (a.kommentar || "").trim(); if (k.startsWith("[zurueckziehen]")) schlecht[a.karte_id] = a.erstellt > (schlecht[a.karte_id] || "") ? a.erstellt : schlecht[a.karte_id];
+      if (k.startsWith("[zurueckziehen]") || !/\bnur:/.test(k)) zurueck[a.karte_id] = Math.max(zurueck[a.karte_id] || 0, a.id); });
+    const alle = (alle0 || []).filter(c => !(schlecht[c.id] && !((c.aktualisiert || "") > schlecht[c.id])) && c.status !== "abgelehnt");
+    const freigegeben = new Set((fr || []).filter(a => a.id > (zurueck[a.karte_id] || 0)).map(a => a.karte_id));
     if (!alle.length) return ziel.innerHTML = `<p class="leer">Noch keine fertigen Clips in der Cloud. Der PC lädt sie nach und nach hoch.</p>`;
     // 24.11.: Ton-Ampel rot oder gelb = Ton defekt. Standardmäßig ausgeblendet, kommt nach grünem Neu-Render von selbst zurück.
     const tonSt = c => c.checks?.ton_sync?.status || "grau";
@@ -245,6 +251,7 @@ async function zeige() {
       <div class="caption">${esc(c.caption)}</div>
       <div class="knoepfe" style="grid-template-columns:1fr 1fr">${tonSt(c) === "rot" ? `<button disabled style="width:100%">Download gesperrt</button>` : `<a class="laden" data-pfad="${esc(c.datei)}" href="#"><button class="ja" style="width:100%">Herunterladen</button></a>`}
       <button class="kopieren">Text kopieren</button></div>
+      <div class="reihe"><button class="klein" data-h2schlecht="${esc(c.id)}" title="Wünsche aufschreiben, der Clip wird neu geschnitten und kommt wieder ins Prüffach">Überarbeiten</button>${freigegeben.has(c.id) ? `<button class="klein" data-h2raus="${esc(c.id)}" title="Geplante Posts aus Buffer nehmen, Clip bleibt postbar">× aus dem Plan nehmen</button>` : ""}</div>
       ${freigegeben.has(c.id) ? `<div class="hinweis" style="color:var(--gruen)">Zum Posten freigegeben, siehe Reiter Posting.</div>`
         : sperrgrund(c) ? `<div class="hinweis">Posten gesperrt: ${esc(sperrgrund(c))}</div>`
         : `<div class="knoepfe"><select class="fslot" style="grid-column:1/-1" aria-label="Slot"><option value="">Nächster freier Slot (TikTok, Shorts, Reels)</option></select>
@@ -308,6 +315,7 @@ function ampel(k, gemessen) {
 const GLUECKSSPIEL = ["casino", "glücksspiel", "gluecksspiel", "gambling", "gamble", "gamblen", "roulette", "blackjack", "poker", "slots", "slot machine", "slotmaschine", "spielautomat", "sportwette", "sportwetten", "wette", "wetten", "stake", "jackpot", "freispiel", "freispiele", "bonus buy", "lootbox", "case opening", "crash game"];
 function sperrgrund(k) {
   const c = k.checks || {};
+  if (k.status === "abgelehnt") return "Abgelehnt";   // 25.11.: wie lib.py
   const t = [k.titel, k.caption, k.art, k.format, k.kanal, k.quelle, k.spiel, ...(k.hinweise || [])].join(" ").toLowerCase();
   if (c.gluecksspiel || GLUECKSSPIEL.some(w => new RegExp(`(?<![\\p{L}\\p{N}_])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "u").test(t))) return "Glücksspiel, wird nie gepostet";
   if (!k.datei) return "Alte Charge, erst neu rendern";
@@ -681,6 +689,7 @@ start();
     animation:h2aurora 50s ease-in-out infinite alternate; will-change:transform; }
   @keyframes h2aurora { 0% { transform:translate3d(-5%,-3%,0) rotate(0); } 100% { transform:translate3d(5%,3%,0) rotate(10deg); } }
   #toast { bottom:calc(20px + env(safe-area-inset-bottom)); }
+  body.h2ohneraus [data-h2raus] { display:none; }
   /* Menü statt Reiterleiste zum Wischen */
   #h2menue { display:flex; align-items:center; gap:10px; width:100%; margin-top:10px; padding:11px 14px; font-family:var(--display); font-size:15px; font-weight:700; letter-spacing:.5px;
     background:linear-gradient(180deg,rgba(255,42,75,.22),rgba(255,42,75,.06)); border:1px solid rgba(255,42,75,.5); color:#fff; text-align:left; }
@@ -839,6 +848,48 @@ start();
       <div class="leg"><span>Balken = Anzahl Clips, rechts Ø Punkte</span></div></details>`;
     if (html && !ziel.querySelector(".h2zusatz")) ziel.insertAdjacentHTML("afterbegin", `<div class="h2zusatz">${html}</div>`);
   }
+  // 26.11.: „Überarbeiten“ (aus Posten) und „×“. Legt nur einen Auftrag an. Der Posten-Job löscht geplante Posts (spätestens 15 Min),
+  // der PC schneidet den Clip nach dem Wunsch neu, danach liegt er wieder im Prüffach. Veröffentlichtes bleibt online.
+  // „×“ erst zeigen, wenn der PC-Abgleich die neue Fassung hat (sonst würde er „×“ als Behalten werten)
+  document.body.classList.add("h2ohneraus");
+  const rausPruefen = () => sb.from("info").select("wert").eq("schluessel", "pc").maybeSingle()
+    .then(({ data }) => document.body.classList.toggle("h2ohneraus", !data?.wert?.rausnehmen)).catch(() => {});
+  rausPruefen(); setInterval(rausPruefen, 60000);
+  async function auftrag(karte_id, aktion, kommentar) {
+    const { data: s } = await sb.auth.getSession();
+    const { error } = await sb.from("auftraege").insert({ karte_id, aktion, kommentar, titel: null, von: s.session.user.id });
+    if (error) throw new Error(error.message);
+  }
+  function schlechtFenster(id) {
+    $("#h2dlg")?.remove();
+    const g = new Set();
+    document.body.insertAdjacentHTML("beforeend", `<div id="h2dlg" class="h2schleier" style="z-index:40;display:grid;place-items:center;padding:12px">
+      <div class="karte" style="width:100%;max-width:520px;margin:0"><h3>Überarbeiten</h3>
+      <p style="font-size:14px;color:var(--leise);margin:0 0 10px">Schreib, was anders werden soll (z. B. „Ende 2 s länger“, „Titel: …“). Der Clip geht aus Posten, noch geplante Posts werden gelöscht (spätestens in 15 Min). Der PC schneidet ihn neu, danach liegt er wieder im Prüffach. Schon veröffentlichte Posts bleiben online.</p>
+      <div class="gruende">${Object.entries(GRUENDE).filter(([k]) => k !== "top").map(([k, t]) => `<button data-g="${k}">${t}</button>`).join("")}</div>
+      <textarea id="h2notiz" placeholder="Deine Wünsche (Pflicht)" style="margin-top:10px"></textarea>
+      <div class="knoepfe"><button id="h2nein">Abbrechen</button><button class="ja" id="h2ja">Überarbeiten</button></div></div></div>`);
+    const d = $("#h2dlg");
+    d.onclick = e => { if (e.target === d) d.remove(); };
+    d.querySelectorAll("[data-g]").forEach(b => b.onclick = () => { g.has(b.dataset.g) ? g.delete(b.dataset.g) : g.add(b.dataset.g); b.classList.toggle("an"); });
+    $("#h2nein").onclick = () => d.remove();
+    $("#h2ja").onclick = async () => {
+      $("#h2ja").disabled = true;
+      const wunsch = $("#h2notiz").value.trim(); if (!wunsch) { $("#h2ja").disabled = false; $("#h2notiz").focus(); return toast("Schreib kurz, was anders werden soll."); }
+      try { await auftrag(id, "ueberarbeiten", kom); d.remove(); toast("Wird überarbeitet. Geplante Posts verschwinden in den nächsten Minuten, die neue Fassung kommt ins Prüffach."); zeige(); }
+      catch (e) { $("#h2ja").disabled = false; toast("Fehler: " + e.message); }
+    };
+  }
+  document.addEventListener("click", async e => {
+    const s = e.target.closest("[data-h2schlecht]"); if (s) return schlechtFenster(s.dataset.h2schlecht);
+    const r = e.target.closest("[data-h2raus]"); if (!r) return;
+    const p = r.dataset.h2plat, name = { tiktok: "TikTok", youtube: "YouTube Shorts", instagram: "Instagram Reels" };
+    if (!confirm(`${p ? name[p] || p : "Alle geplanten Posts"} aus dem Plan nehmen?\n\nDer Posten-Job löscht ${p ? "diesen Post" : "sie"} in Buffer (spätestens in 15 Min). Der Clip bleibt postbar. Schon veröffentlichte Posts bleiben online.`)) return;
+    r.disabled = true;
+    try { await auftrag(r.dataset.h2raus, "behalten", ("[rausnehmen] " + (p ? "nur:" + p : "")).trim()); toast("Rausgenommen. Buffer wird in den nächsten Minuten aktualisiert."); zeige(); }
+    catch (x) { r.disabled = false; toast("Fehler: " + x.message); }
+  });
+
   // Vorschau leiser (Marvin 25.11.): nur die Wiedergabe, Dateien und Posts bleiben unverändert. Start 45 %, eigener Regler-Wert wird gemerkt.
   const LAUT = () => { try { const v = parseFloat(localStorage.getItem("h2laut")); return isNaN(v) ? 0.45 : v; } catch (e) { return 0.45; } };
   const leise = e => { const v = e.target; if (v.tagName === "VIDEO" && !v.dataset.h2laut) { v.dataset.h2laut = "1"; v.volume = LAUT(); } };

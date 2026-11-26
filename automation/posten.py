@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 from lib import (CONFIG, Buffer, Supabase, YouTube, buffer_voll, clip_wert, regeln, strike_sperre, ist_bonus, sofort_slot, sofort_warnungen, format_von, live, metadata_bauen,
                  naechster_slot, slot_pruefen, sperrgrund, texte_aus_kommentar, texte_bauen, texte_pruefen, texte_text, titel_typ,
-                 wunsch_slots)
+                 wunsch_slots, RAUSNEHMEN, RUECKZUG, rueckzug_art, rueckzug_plattformen)
 
 STANDARD = {"erledigte_auftraege": [], "geplant": [], "probelauf": [], "gesperrt": [], "letzter_lauf": None}
 
@@ -212,6 +212,67 @@ def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt, yt=None):
     return [a for a in offen if a["id"] > bis]
 
 
+def offene_rueckzuege(sb, erledigt):
+    """26.11.: „Überarbeiten“ aus Posten ([zurueckziehen]) und „×“ ([rausnehmen], optional nur:plattform), älteste zuerst."""
+    q = urllib.parse.urlencode({
+        "select": "id,karte_id,kommentar,erstellt",
+        "or": f"(kommentar.like.{RUECKZUG}*,kommentar.like.{RAUSNEHMEN}*)",
+        "order": "id.asc",
+    })
+    return [a for a in sb.holen("auftraege", q) if a["id"] not in erledigt and rueckzug_art(a.get("kommentar"))]
+
+
+def rueckzuege_anwenden(rueck, zustand, buf, ist_live, yt=None):
+    """Löscht die betroffenen noch geplanten Posts (Buffer oder YouTube direkt). Veröffentlichtes bleibt, bekommt nur einen
+    Hinweis. Gibt (fertige Rückzug-IDs, Sperren) zurück. Sperren: {karte_id: [(rueckzug_id, plattformen oder None)]},
+    sie gelten für Freigaben mit kleinerer ID. Geht ein Löschen schief, bleibt der Rückzug offen (nächster Lauf)."""
+    fertig, sperren = [], {}
+    for r in sorted(rueck, key=lambda a: a["id"]):
+        kid, art = r["karte_id"], rueckzug_art(r.get("kommentar"))
+        nur = None if art == "schlecht" else rueckzug_plattformen(r.get("kommentar"))
+        sperren.setdefault(kid, []).append((r["id"], nur))
+        text = "Zum Überarbeiten zurückgezogen" if art == "schlecht" else "Aus dem Plan genommen"
+        alles_gut = True
+        for g in zustand["geplant"]:
+            if g.get("karte_id") != kid or (g.get("auftrag_id") or 0) > r["id"] or (nur and g.get("plattform", "tiktok") not in nur):
+                continue
+            if g.get("status") == "gesendet":
+                g["hinweis"] = f"{text}, aber schon veröffentlicht: nur in der App der Plattform löschbar."
+                continue
+            if g.get("status") != "geplant" or not ist_live:
+                continue
+            try:
+                if g.get("weg") == "direkt":
+                    if yt is None:
+                        raise RuntimeError("kein YouTube-Zugang")
+                    yt.loeschen(g["youtube_id"])
+                elif g.get("buffer_id"):
+                    if buf is None:
+                        raise RuntimeError("Buffer nicht erreichbar")
+                    buf.post_loeschen(g["buffer_id"])
+            except Exception as fehler:
+                if not ("not" in str(fehler).lower() and "found" in str(fehler).lower()):   # „nicht gefunden“ = schon weg
+                    alles_gut = False
+                    g["hinweis"] = f"{text}: Löschen ging nicht ({str(fehler)[:160]}). Nächster Lauf versucht es wieder, sonst von Hand löschen."
+                    continue
+            g.update(status="storniert", hinweis=f"{text}: gelöscht.")
+            print(f"{art:9} {g.get('plattform')} storniert  {g.get('titel')}")
+        if alles_gut:
+            fertig.append(r["id"])
+    return fertig, sperren
+
+
+def gesperrte_plattformen(auftrag, sperren):
+    """None = Freigabe gilt normal. Menge = diese Plattformen entfallen. 'alle' = Freigabe verfällt ganz."""
+    weg = set()
+    for rid, nur in sperren.get(auftrag["karte_id"], []):
+        if rid > auftrag["id"]:
+            if nur is None:
+                return "alle"
+            weg |= nur
+    return weg or None
+
+
 def strikes_raeumen(zustand, strikes, buf, yt, ist_live):
     """Strike-Regel: noch geplante Posts gesperrter Streamer (bzw. aller Fanpage-Clips ab dem 2. Strike) löschen
     und aus der YouTube-Warteschlange nehmen. Veröffentlichte Posts löscht Marvin in der App."""
@@ -320,6 +381,7 @@ def main():
     zustand = {**STANDARD, **(sb.info_lesen("posting", {}) or {})}
     erledigt = set(zustand["erledigte_auftraege"])
     offen = offene_freigaben(sb, erledigt)
+    rueck = offene_rueckzuege(sb, set(zustand.get("erledigte_rueckzuege") or []))
     ist_live = live()
     plattformen = aktive_plattformen()
     kanaele, org_id, buf = {}, None, None
@@ -347,7 +409,7 @@ def main():
     korrektur = (sb.info_lesen("texte_korrektur", {}) or {}).get("freigabe")
     stopp_offen = bool((sb.info_lesen("strikes", {}) or {}).get("liste")) or any((g.get("status") == "geplant" or g.get("loeschen_offen")) and (g.get("auftrag_id") or 0) <= int((sb.info_lesen("posten_stopp", {}) or {}).get("bis_auftrag") or 0)
                       for g in zustand["geplant"])
-    if ist_live and (offen or alter > 3600 or korrektur or stopp_offen):
+    if ist_live and (offen or rueck or alter > 3600 or korrektur or stopp_offen):
         try:
             buf = Buffer()
             org_id, kanaele = buf.kanaele(CONFIG["buffer_kanal_name"])
@@ -366,6 +428,12 @@ def main():
             print(f"Buffer-Abgleich nicht gelaufen: {fehler}")
 
     offen = stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt, yt)
+    # 26.11.: erst zurücknehmen („Überarbeiten“, „×“), dann neue Freigaben. So wird nie ein zurückgenommener Clip geplant.
+    fertig_rueck, rueck_sperren = rueckzuege_anwenden(rueck, zustand, buf, ist_live, yt)
+    if ist_live:
+        zustand["erledigte_rueckzuege"] = (list(zustand.get("erledigte_rueckzuege") or []) + fertig_rueck)[-1000:]
+    zustand["youtube_warte"] = [w for w in zustand.get("youtube_warte", [])
+                                if gesperrte_plattformen({"id": w.get("auftrag_id") or 0, "karte_id": w.get("karte_id")}, rueck_sperren) is None]
     strikes_raeumen(zustand, strikes, buf, yt, ist_live)
     for g in zustand["geplant"]:   # direkte YouTube-Uploads: nach der Veröffentlichungszeit gelten sie als gesendet
         if g.get("weg") == "direkt" and g.get("status") == "geplant" and dt.datetime.fromisoformat(g["slot_utc"]) <= jetzt:
@@ -401,6 +469,12 @@ def main():
     belegt = {p: belegte_slots(zustand["geplant"], p) for p in plattformen}
     probe, gesperrt = [], []
     for a in offen:
+        weg = gesperrte_plattformen(a, rueck_sperren)
+        if weg == "alle":   # 26.11.: zurückgenommen, Freigabe verfällt ohne Post
+            print(f"verfallen {a['karte_id']}: zurückgenommen")
+            if ist_live:
+                zustand["erledigte_auftraege"].append(a["id"])
+            continue
         k = {**(a.get("karten") or {})}
         if a.get("titel"):
             k["titel"] = a["titel"]
@@ -413,6 +487,8 @@ def main():
         link_cache = {}
         wunsch = wunsch_slots(a.get("kommentar"))   # Kalender: nur gewählte Plattformen, je im gewählten Slot
         ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
+        if weg:   # 26.11.: „×“ auf einzelnen Plattformen, die fallen weg
+            ziel = [p for p in ziel if p not in weg]
         # 25.11.: kein Doppelpost. Ist die Karte auf einer Plattform noch geplant, entfällt diese Plattform.
         doppelt = [p for p in ziel if any(g.get("karte_id") == a["karte_id"] and g.get("plattform", "tiktok") == p
                                           and g.get("status") == "geplant" for g in zustand["geplant"] + probe)]
