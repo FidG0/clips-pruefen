@@ -286,6 +286,14 @@ class WunschSlots(unittest.TestCase):
         frueh = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=20)
         self.assertTrue(all(dt.datetime.fromisoformat(e["slot_utc"]) < frueh for e in z))
 
+    def test_schon_gesendete_plattform_nicht_nochmal(self):   # 26.11.: Reels lief schon, zweite Freigabe nur noch TikTok
+        lief = [{"karte_id": "k9", "plattform": "instagram", "status": "gesendet", "slot_utc": "2026-11-25T21:00:00+00:00"}]
+        self.assertEqual(sorted(e["plattform"] for e in self._lauf("[posten]", lief)), ["tiktok"])
+
+    def test_nochmal_postet_auch_gesendete(self):
+        lief = [{"karte_id": "k9", "plattform": "instagram", "status": "gesendet", "slot_utc": "2026-11-25T21:00:00+00:00"}]
+        self.assertEqual(sorted(e["plattform"] for e in self._lauf("[posten] [nochmal]", lief)), ["instagram", "tiktok"])
+
     def test_ohne_wunsch_alle_plattformen(self):
         self.assertEqual(sorted(e["plattform"] for e in self._lauf("[posten]")), ["instagram", "tiktok"])
         self.assertEqual(len(WunschSlots.letzter_zustand["youtube_warte_probe"]), 1)
