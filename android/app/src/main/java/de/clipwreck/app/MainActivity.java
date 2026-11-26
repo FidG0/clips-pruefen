@@ -126,7 +126,25 @@ public class MainActivity extends Activity {
     static boolean bleibtInApp(Uri u) {
         if (u == null || u.getHost() == null) return false;
         String h = u.getHost().toLowerCase();
-        return istUnsereSeite(u) || h.endsWith(".supabase.co") || "about".equals(u.getScheme());
+        return istUnsereSeite(u) || h.endsWith(".supabase.co") || istPc(u) || "about".equals(u.getScheme());
+    }
+
+    /**
+     * Das volle Dashboard auf Marvins PC über Tailscale (z. B. http://100.93.141.24:8800/). Die Handyseite leitet
+     * bei laufendem PC automatisch dorthin. Ohne diese Regel ging das in Chrome auf (Marvin 26.11.).
+     */
+    static boolean istPc(Uri u) {
+        if (u == null || u.getHost() == null) return false;
+        String h = u.getHost().toLowerCase();
+        if (h.endsWith(".ts.net")) return true;
+        String[] t = h.split("\\.");
+        if (t.length != 4) return false;
+        try {
+            int a = Integer.parseInt(t[0]), b = Integer.parseInt(t[1]);
+            return a == 100 && b >= 64 && b <= 127; // Tailscale-Adressbereich 100.64.0.0/10
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     private void extern(Uri u) {
@@ -171,6 +189,12 @@ public class MainActivity extends Activity {
 
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+            if (request.isForMainFrame() && istPc(request.getUrl())) {
+                // PC aus oder Tailscale auf dem Handy aus: zurück zur Handyseite, ohne erneute Umleitung.
+                Toast.makeText(MainActivity.this, "PC-Dashboard nicht erreichbar (PC aus oder Tailscale aus)", Toast.LENGTH_LONG).show();
+                view.loadUrl(START + "?pruefen");
+                return;
+            }
             if (request.isForMainFrame()) {
                 String html = "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head>"
                         + "<body style='background:#0c0b0e;color:#eee;font-family:sans-serif;display:flex;flex-direction:column;"
@@ -179,6 +203,21 @@ public class MainActivity extends Activity {
                         + "<button onclick=\"location.href='" + START + "'\" style='font-size:18px;padding:12px 28px;"
                         + "border:0;border-radius:10px;background:#e11d2e;color:#fff'>Nochmal versuchen</button></body></html>";
                 view.loadDataWithBaseURL(START, html, "text/html", "utf-8", null);
+            }
+        }
+
+        @Override
+        public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+            if (istPc(Uri.parse(url))) {
+                // Antwortet der PC nicht schnell (Tailscale aus), nicht minutenlang weiß hängen lassen.
+                final String versuch = url;
+                view.postDelayed(() -> {
+                    if (versuch.equals(view.getUrl()) && view.getProgress() < 30) {
+                        view.stopLoading();
+                        Toast.makeText(MainActivity.this, "PC-Dashboard antwortet nicht, bleibe auf der Handyseite", Toast.LENGTH_LONG).show();
+                        view.loadUrl(START + "?pruefen");
+                    }
+                }, 8000);
             }
         }
 
