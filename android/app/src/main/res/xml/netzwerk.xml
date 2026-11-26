@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Unverschlüsseltes http nur für das PC-Dashboard über Tailscale (Verkehr läuft im verschlüsselten Tailscale-Tunnel). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">100.93.141.24</domain>
+        <domain includeSubdomains="true">ts.net</domain>
+    </domain-config>
+</network-security-config>
