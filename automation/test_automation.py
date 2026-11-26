@@ -310,6 +310,12 @@ class Sperren(unittest.TestCase):
         self.assertIn("Glücksspiel", lib.sperrgrund({**self.ok, "checks": {"ton_sync": {"status": "gruen"}, "gluecksspiel": True}}))
         self.assertIsNone(lib.sperrgrund({**self.ok, "titel": "Steakhouse Chaos"}))
 
+    def test_ohne_caption_im_bild_gesperrt(self):   # 26.11.: galt bisher nur am PC (Zentrale), nicht in GitHub Actions
+        c = {"ton_sync": {"status": "gruen"}, "caption_box": {"status": "nein"}}
+        self.assertIn("Caption", lib.sperrgrund({**self.ok, "checks": c}))
+        c["caption_box"]["status"] = "ja"
+        self.assertIsNone(lib.sperrgrund({**self.ok, "checks": c}))
+
     def test_test_clips_nie_posten(self):   # 26.11.: Gegencheck-Clips im Prüffach
         for k in ({"test": True}, {"nicht_posten": True}, {"titel": "TEST KI-Fehlgriff: Jynxzi"},
                   {"hinweise": ["TEST: von der KI fälschlich gewählt"]}):
