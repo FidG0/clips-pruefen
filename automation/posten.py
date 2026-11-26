@@ -403,6 +403,11 @@ def main():
     jetzt = dt.datetime.now(dt.timezone.utc)
     trends = sb.info_lesen("trends", None)   # vom PC (cloud_sync aus lernen/trends.json), fehlt er: nur config-Hashtags
     r = regeln(sb)
+    try:   # 26.11.: automatisch gefundene Handles (tools/handles.py) ergänzen die geprüften aus config.json
+        from lib import handles_mischen
+        CONFIG["handles"] = handles_mischen(sb.info_lesen("handles", {}) or {})
+    except Exception as fehler:
+        print(f"Handles nicht ergänzt: {fehler}")
     CONFIG["plattformen"].setdefault("youtube", {})["max_posts_pro_tag"] = max(1, r["youtube_pro_tag"])
     strikes = sb.info_lesen("strikes", {}) or {}
     yt, yt_fehler = None, None

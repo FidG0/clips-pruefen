@@ -40,7 +40,7 @@ class Caption(unittest.TestCase):
         t = lib.caption_bauen(k)
         self.assertNotIn("\n", t)
         self.assertEqual(t.lower().count("#gta6"), 1)
-        self.assertTrue(t.endswith("#gta6 #gta #Gaming #viral #fyp"))   # 26.11.: Marvins Vorlage
+        self.assertTrue(t.endswith("#gta6 #gta #Gaming #viral #fyp"))   # 26.11.: Marvins Vorlage (Text bringt #gta6 mit)
         self.assertLessEqual(len([w for w in t.split() if w.startswith("#")]), 6)
 
     def test_titeltyp(self):
@@ -793,8 +793,8 @@ class MarvinsVorlage(unittest.TestCase):
         k = {"titel": "Monte findet „Schradin“ in GTA 6 und verprügelt ihn 💀", "art": "Fanpage-Clip",
              "caption": "Monte findet Schradin in GTA 6 und kennt keine Gnade 💀 Wer hätte das gedacht? Wen würdest du im Spiel zuerst verprügeln? 👇"}
         t = lib.texte_text(lib.texte_bauen(k, "tiktok"), "tiktok")
-        self.assertEqual(t, "@montanablack findet @maximalschradin in GTA 6 und kennt keine Gnade Wer hätte das gedacht? "
-                            "Wen würdest du im Spiel zuerst verprügeln? #gta6 #gta #Gaming #viral #fyp")
+        self.assertEqual(t, "@montanablack findet @maximalschradin in GTA 6 und kennt keine Gnade 💀 Wer hätte das gedacht? "
+                            "Wen würdest du im Spiel zuerst verprügeln? 👇 #gta6 #gta #Gaming #viral #fyp")
         ig = lib.texte_text(lib.texte_bauen(k, "instagram"), "instagram")
         self.assertNotIn("Monte findet „Schradin“", ig)          # Titel nie in der Beschreibung
         self.assertTrue(ig.endswith("\n\n#gta6 #gta #Gaming #viral #fyp"))
@@ -805,9 +805,33 @@ class MarvinsVorlage(unittest.TestCase):
     def test_frage_wird_ergaenzt_und_ohne_emoji(self):
         t = lib.texte_bauen({"titel": "x", "caption": "Zarbex crasht in GTA 6 😭"}, "tiktok")
         self.assertIn("?", t["beschreibung"])
-        self.assertNotIn("😭", t["beschreibung"])
+        self.assertIn("😭", t["beschreibung"])   # Emojis erlaubt (26.11. nachmittags)
         self.assertTrue(t["beschreibung"].startswith("@zarbex crasht"))
 
     def test_ohne_spiel_streamer_tag(self):
         t = lib.texte_bauen({"titel": "x", "caption": "Papaplatte lacht sich kaputt. Warum?", "kanal": "papaplatte"}, "instagram")
         self.assertEqual(t["hashtags"], ["#papaplatte", "#twitch", "#Gaming", "#viral", "#fyp"])
+
+
+class HashtagsUndHandles(unittest.TestCase):
+    def test_eigene_hashtags_aus_dem_text_haben_vorrang(self):
+        k = {"titel": "T", "caption": "Zarbex crasht in GTA 6 😭 Wer kennt das? #gta6 #zarbex #streamingdeutschland #fail"}
+        t = lib.texte_bauen(k, "tiktok")
+        self.assertEqual(t["hashtags"], ["#gta6", "#zarbex", "#streamingdeutschland", "#fail"])
+        self.assertIn("😭", t["beschreibung"])                      # Emojis sind erlaubt
+        self.assertEqual(lib.texte_bauen(k, "youtube")["hashtags"], ["#shorts", "#gta6", "#zarbex"])
+
+    def test_ohne_eigene_tags_trends(self):
+        trends = {"hashtags": [{"tag": "gta6gameplay", "gewicht": 100}], "streamer": [], "top_clips": []}
+        t = lib.texte_bauen({"titel": "T", "caption": "Zarbex crasht in GTA 6"}, "tiktok", trends=trends)
+        self.assertEqual(t["hashtags"][:3], ["#gta6", "#gta", "#gta6gameplay"])
+
+    def test_handles_mischen_auto_fuellt_nur_luecken(self):
+        tab = lib.handles_mischen({"auto": [{"namen": ["trymacs"], "youtube": "@falsch"}, {"namen": ["neuer"], "youtube": "@neuer"}]})
+        self.assertEqual(next(h for h in tab if "Trymacs" in h["namen"])["youtube"], "@trymacs")
+        self.assertEqual(next(h for h in tab if "neuer" in h["namen"])["youtube"], "@neuer")
+        self.assertTrue(lib.handles_setzen("Neuer lacht", "youtube", {"handles": tab}).startswith("@neuer"))
+
+    def test_handles_je_plattform(self):
+        self.assertTrue(lib.handles_setzen("Schradin lacht", "instagram").startswith("@maximal_schradin"))
+        self.assertTrue(lib.handles_setzen("Eli lacht", "tiktok").startswith("Eli "))   # kein geprüftes TikTok-Handle
