@@ -86,6 +86,9 @@
   .gruende { display:flex; flex-wrap:wrap; gap:6px; }
   .gruende button { padding:6px 10px; font-size:13px; border-radius:3px; }
   .gruende button.an { border-color:var(--gelb); color:var(--gelb); background:rgba(255,210,63,.1); }
+  .gruende .ggr { display:flex; flex-wrap:wrap; gap:6px; width:100%; }
+  .gruende .ggr small { width:100%; font-family:var(--mono); font-size:10.5px; letter-spacing:1px; text-transform:uppercase; color:var(--leise); margin-top:4px; }
+  .gruende .ginfo { width:100%; font-size:12px; color:var(--cyan); min-height:1em; }
   .tipp { font-size:12px; color:var(--leise); text-align:center; margin-top:10px; }
   .tastenhilfe { display:none; }
   @media (hover:hover) and (pointer:fine) { .tastenhilfe { display:block; } }
@@ -379,8 +382,40 @@ async function clipsListe(ziel, mehr) {
 }
 
 // ---------- Prüfen: Review-Queue (Wischen, Tasten, Notiz) ----------
-// 24.11.: dieselben 14 festen Gründe wie in der Zentrale (lernen/gruende_chips.json), Schlüssel nie umbenennen
-const GRUENDE = { ende_zu_frueh: "Ende zu früh", langweilig: "Langweilig / keine Pointe", ton_sync: "Ton passt nicht", titel: "Titel schlecht", zu_lang: "Zu lang", spiel_abgeschnitten: "Bild abgeschnitten", kontext: "Ohne Kontext unverständlich", anfang_zu_spaet: "Anfang fehlt", zu_kurz: "Zu kurz", zu_viele_schnitte: "Zu viele Schnitte", untertitel: "Untertitel falsch", werbepause: "Werbepause / Standbild", heikel: "Heikel", top: "Richtig gut, mehr davon" };
+// 26.11.: dieselben 32 festen Gründe wie in der Zentrale (lernen/gruende_chips.json, Stand 26.11.), Schlüssel nie umbenennen.
+// Gegenteile schließen sich aus (Tippen auf eins nimmt das andere weg). Gruppiert, damit es am Handy übersichtlich bleibt.
+const GRUENDE = { langweilig: "Langweilig / keine Pointe", kontext: "Ohne Kontext unverständlich", ende_zu_frueh: "Ende zu früh", anfang_zu_spaet: "Anfang fehlt / zu spät",
+  zu_lang: "Zu lang", zu_kurz: "Zu kurz", zu_viele_schnitte: "Zu viele Schnitte", titel: "Titel schlecht", untertitel: "Untertitel falsch", ton_sync: "Ton passt nicht zum Bild",
+  spiel_abgeschnitten: "Wichtiges im Bild abgeschnitten", werbepause: "Werbepause / Standbild", heikel: "Heikel (sexuell, Gewalt, Ärger)", top: "Richtig gut, mehr davon",
+  ende_zu_spaet: "Ende zu spät", anfang_zu_frueh: "Anfang zu früh / zu viel Vorlauf", zu_wenig_schnitte: "Zu wenig Schnitte", zu_viel_zoom: "Zu viel Zoom", zu_wenig_zoom: "Zu wenig Zoom",
+  zu_viel_shake: "Zu viel Wackeln", zu_wenig_shake: "Zu wenig Wackeln", facecam_zu_gross: "Facecam zu groß", facecam_zu_klein: "Facecam zu klein", spiel_zu_gross: "Spielbild zu groß",
+  zu_laut: "Zu laut", zu_leise: "Zu leise", caption_zu_gross: "Caption zu groß", caption_zu_klein: "Caption zu klein", untertitel_zu_gross: "Untertitel zu groß",
+  untertitel_zu_klein: "Untertitel zu klein", ton_zu_frueh: "Ton kommt zu früh", ton_zu_spaet: "Ton kommt zu spät" };
+const GEGEN = { ende_zu_frueh: "ende_zu_spaet", anfang_zu_spaet: "anfang_zu_frueh", zu_lang: "zu_kurz", zu_viele_schnitte: "zu_wenig_schnitte", zu_viel_zoom: "zu_wenig_zoom",
+  zu_viel_shake: "zu_wenig_shake", facecam_zu_gross: "facecam_zu_klein", spiel_abgeschnitten: "spiel_zu_gross", zu_laut: "zu_leise", caption_zu_gross: "caption_zu_klein",
+  untertitel_zu_gross: "untertitel_zu_klein", ton_zu_frueh: "ton_zu_spaet", langweilig: "top" };
+Object.entries({ ...GEGEN }).forEach(([a, b]) => { GEGEN[b] = a; });
+const GRUPPEN = [["Inhalt", ["langweilig", "top", "kontext", "heikel", "werbepause"]],
+  ["Länge", ["ende_zu_frueh", "ende_zu_spaet", "anfang_zu_spaet", "anfang_zu_frueh", "zu_lang", "zu_kurz"]],
+  ["Schnitt und Bild", ["zu_viele_schnitte", "zu_wenig_schnitte", "zu_viel_zoom", "zu_wenig_zoom", "zu_viel_shake", "zu_wenig_shake", "spiel_abgeschnitten", "spiel_zu_gross", "facecam_zu_gross", "facecam_zu_klein"]],
+  ["Ton", ["ton_sync", "ton_zu_frueh", "ton_zu_spaet", "zu_laut", "zu_leise"]],
+  ["Text", ["titel", "untertitel", "caption_zu_gross", "caption_zu_klein", "untertitel_zu_gross", "untertitel_zu_klein"]]];
+const LERNT = { ende_zu_frueh: "den Nachlauf am Ende", ende_zu_spaet: "den Nachlauf am Ende", anfang_zu_spaet: "den Vorlauf am Anfang", anfang_zu_frueh: "den Vorlauf am Anfang",
+  zu_lang: "die Höchstlänge", zu_kurz: "die Höchstlänge", zu_viele_schnitte: "ab wann Pausen geschnitten werden", zu_wenig_schnitte: "ab wann Pausen geschnitten werden",
+  spiel_abgeschnitten: "die Breite des Spielbilds", spiel_zu_gross: "die Breite des Spielbilds" };
+const grundInfo = k => [GEGEN[k] ? `Gegenteil: ${GRUENDE[GEGEN[k]]}.` : "", LERNT[k] ? `Ab 3 gleichen Gründen passt das System ${LERNT[k]} selbst an.` : "Fließt ins Lernen ein."].filter(Boolean).join(" ");
+function gruendeHtml(ohne = []) {
+  return GRUPPEN.map(([n, ks]) => { const b = ks.filter(k => !ohne.includes(k) && GRUENDE[k]);
+    return b.length ? `<div class="ggr"><small>${n}</small>${b.map(k => `<button data-g="${k}" title="${esc(grundInfo(k))}">${GRUENDE[k]}</button>`).join("")}</div>` : ""; }).join("")
+    + `<div class="ginfo" aria-live="polite"></div>`;
+}
+// Tippen: an/aus, Gegenteil geht aus, darunter steht kurz, was der Grund bewirkt
+function grundTippen(menge, b, wurzel) {
+  const k = b.dataset.g, an = !menge.has(k);
+  if (an) { menge.add(k); const g = GEGEN[k]; if (g && menge.delete(g)) wurzel.querySelector(`[data-g="${g}"]`)?.classList.remove("an"); } else menge.delete(k);
+  b.classList.toggle("an", an);
+  const info = wurzel.querySelector(".ginfo"); if (info) info.textContent = an ? `${GRUENDE[k]}: ${grundInfo(k)}` : "";
+}
 let queue = [], gewaehlt = new Set();
 async function pruefenQueue(ziel) {
   const [{ data: karten, error }, { data: wartend }] = await Promise.all([
@@ -564,7 +599,7 @@ async function naechste(ziel, gesamt) {
       ${(k.hinweise || []).map(h => `<div class="hinweis">• ${esc(h)}</div>`).join("")}
     </div>
     <div class="karte">
-      <div class="gruende">${Object.entries(GRUENDE).map(([i, t]) => `<button data-g="${i}">${t}</button>`).join("")}</div>
+      <div class="gruende">${gruendeHtml()}</div>
       <div class="mehr"><textarea id="notiz" placeholder="Notiz (warum, was ändern). Fließt ins Regelwerk ein."></textarea><input id="neuerTitel" placeholder="Neuer Titel (optional)"></div>
       <div class="knoepfe3" style="margin-top:12px">
         <button class="nein" data-a="ablehnen">Verwerfen</button>
@@ -587,7 +622,7 @@ async function naechste(ziel, gesamt) {
   if (queue[1]) signiert(BUCKET_VORSCHAU, vorschauPfad(queue[1]));
   slotsFuellen();
   $("#spaeter").onclick = () => { queue.push(queue.shift()); naechste(); };
-  ziel.querySelectorAll(".gruende [data-g]").forEach(b => b.onclick = () => { const g = b.dataset.g; gewaehlt.has(g) ? gewaehlt.delete(g) : gewaehlt.add(g); b.classList.toggle("an"); });
+  ziel.querySelectorAll(".gruende [data-g]").forEach(b => b.onclick = () => grundTippen(gewaehlt, b, ziel.querySelector(".gruende")));
   ziel.querySelectorAll("[data-a]").forEach(b => b.onclick = () => entscheide(b.dataset.a));
   wischen($("#stapel"));
 }
@@ -866,12 +901,12 @@ start();
     document.body.insertAdjacentHTML("beforeend", `<div id="h2dlg" class="h2schleier" style="z-index:40;display:grid;place-items:center;padding:12px">
       <div class="karte" style="width:100%;max-width:520px;margin:0"><h3>Überarbeiten</h3>
       <p style="font-size:14px;color:var(--leise);margin:0 0 10px">Schreib, was anders werden soll (z. B. „Ende 2 s länger“, „Titel: …“). Der Clip geht aus Posten, noch geplante Posts werden gelöscht (spätestens in 15 Min). Der PC schneidet ihn neu, danach liegt er wieder im Prüffach. Schon veröffentlichte Posts bleiben online.</p>
-      <div class="gruende">${Object.entries(GRUENDE).filter(([k]) => k !== "top").map(([k, t]) => `<button data-g="${k}">${t}</button>`).join("")}</div>
+      <div class="gruende">${gruendeHtml(["top"])}</div>
       <textarea id="h2notiz" placeholder="Deine Wünsche (Pflicht)" style="margin-top:10px"></textarea>
       <div class="knoepfe"><button id="h2nein">Abbrechen</button><button class="ja" id="h2ja">Überarbeiten</button></div></div></div>`);
     const d = $("#h2dlg");
     d.onclick = e => { if (e.target === d) d.remove(); };
-    d.querySelectorAll("[data-g]").forEach(b => b.onclick = () => { g.has(b.dataset.g) ? g.delete(b.dataset.g) : g.add(b.dataset.g); b.classList.toggle("an"); });
+    d.querySelectorAll("[data-g]").forEach(b => b.onclick = () => grundTippen(g, b, d.querySelector(".gruende")));
     $("#h2nein").onclick = () => d.remove();
     $("#h2ja").onclick = async () => {
       $("#h2ja").disabled = true;
