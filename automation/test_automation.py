@@ -316,6 +316,12 @@ class Sperren(unittest.TestCase):
         c["caption_box"]["status"] = "ja"
         self.assertIsNone(lib.sperrgrund({**self.ok, "checks": c}))
 
+    def test_endkontrolle_rot_gesperrt(self):   # 26.11.: Ton länger als Bild u. a., Ergebnis kommt vom PC
+        c = {"ton_sync": {"status": "gruen"}, "endkontrolle": {"status": "rot", "grund": "Ton 1,2 s länger als Bild"}}
+        self.assertIn("Ton 1,2 s", lib.sperrgrund({**self.ok, "checks": c}))
+        c["endkontrolle"]["status"] = "gruen"
+        self.assertIsNone(lib.sperrgrund({**self.ok, "checks": c}))
+
     def test_test_clips_nie_posten(self):   # 26.11.: Gegencheck-Clips im Prüffach
         for k in ({"test": True}, {"nicht_posten": True}, {"titel": "TEST KI-Fehlgriff: Jynxzi"},
                   {"hinweise": ["TEST: von der KI fälschlich gewählt"]}):
