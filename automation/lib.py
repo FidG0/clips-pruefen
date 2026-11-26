@@ -53,8 +53,16 @@ class Supabase:
     def __init__(self):
         self.url = (env("SUPABASE_URL", pflicht=False) or SUPABASE_URL_STANDARD).rstrip("/")
         self.key = env("SUPABASE_SECRET", pflicht=False)
-        if not self.key and SECRET_DATEI_PC.exists():  # auf dem PC: Key liegt nur lokal
-            self.key = SECRET_DATEI_PC.read_text(encoding="utf-8").strip()
+        if not self.key:  # auf dem PC: Key liegt nur lokal, zuerst im DPAPI-Tresor (25.11.), sonst Klartext
+            try:
+                import sys
+                sys.path.insert(0, str(SECRET_DATEI_PC.parents[1]))
+                import geheim
+                self.key = (geheim.lies_text("cloud/supabase_secret.txt") or "").strip() or None
+            except Exception:  # noqa: BLE001
+                self.key = None
+            if not self.key and SECRET_DATEI_PC.exists():
+                self.key = SECRET_DATEI_PC.read_text(encoding="utf-8").strip()
         if not self.key:
             raise SystemExit("SUPABASE_SECRET fehlt.")
         self.kopf = {"apikey": self.key}
@@ -588,6 +596,26 @@ def titel_typ(titel):
     return "aussage"
 
 
+# ---------------------------------------------------------------- Zurücknehmen (26.11.)
+# „Überarbeiten“ aus Posten: Auftrag mit Kommentar [zurueckziehen]. Alle noch geplanten Posts der Karte werden gelöscht,
+#   ältere Freigaben verfallen, der PC schneidet den Clip nach Marvins Wunsch neu, danach liegt er wieder im Prüffach.
+# „×“ (rausnehmen): Kommentar [rausnehmen], optional „nur:tiktok,youtube“. Nur geplante Posts gehen raus, Clip bleibt postbar.
+# Veröffentlichte Posts fasst beides nie an.
+RUECKZUG = "[zurueckziehen]"
+RAUSNEHMEN = "[rausnehmen]"
+
+
+def rueckzug_art(kommentar):
+    k = (kommentar or "").strip()
+    return "schlecht" if k.startswith(RUECKZUG) else "raus" if k.startswith(RAUSNEHMEN) else None
+
+
+def rueckzug_plattformen(kommentar):
+    """None = alle Plattformen, sonst die Menge aus „nur:tiktok,youtube“."""
+    m = re.search(r"\bnur:([a-z,]+)", kommentar or "")
+    return {p for p in m.group(1).split(",") if p} if m else None
+
+
 # ---------------------------------------------------------------- Sperren vor dem Posten
 # ---------------------------------------------------------------- Strike-Regel (25.11., Marvin: „ja genau so“)
 # info.strikes = {"liste": [{"karte_id", "streamer", "plattform", "zeit", "notiz"}]}. Erster Urheberrechts-Strike:
@@ -632,6 +660,8 @@ def sperrgrund(karte, cfg=CONFIG, strikes=None):
         return st
     s = cfg.get("sperren", {})
     c = karte.get("checks") or {}
+    if karte.get("status") == "abgelehnt":   # 26.11.: abgelehnte Clips nie posten
+        return "Abgelehnt, wird nicht gepostet."
     text = " ".join(str(karte.get(k) or "") for k in ("titel", "caption", "art", "format", "kanal", "quelle", "spiel"))
     text += " " + " ".join(str(h) for h in (karte.get("hinweise") or []))
     text = text.lower()
