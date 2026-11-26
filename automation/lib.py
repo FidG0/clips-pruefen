@@ -739,6 +739,8 @@ def sperrgrund(karte, cfg=CONFIG, strikes=None):
         return "Glücksspiel-Szene, wird nie gepostet."
     if s.get("original_pflicht", True) and not karte.get("datei"):
         return "Alte Charge: kein neu gerendertes Original im Fach 'fertig'."
+    if (c.get("caption_box") or {}).get("status") == "nein":   # 26.11. Marvin: jeder Clip braucht Caption im Bild
+        return "Keine Caption im Bild, wird nicht gepostet."
     pflicht = s.get("ton_sync_pflicht", "gruen")
     status = (c.get("ton_sync") or {}).get("status")
     if pflicht and status != pflicht:
