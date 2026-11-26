@@ -743,6 +743,9 @@ def sperrgrund(karte, cfg=CONFIG, strikes=None):
         return "Keine Caption im Bild, wird nicht gepostet."
     if (c.get("wiederholung") or {}).get("status") == "rot":   # 26.11.: überlappende Teile oder doppelte Untertitel im Clip
         return "Wiederholung im Clip (doppelter Ton oder Untertitel), wird nicht gepostet."
+    ek = c.get("endkontrolle") or {}
+    if ek.get("status") == "rot":   # 26.11.: tools/endkontrolle.py am PC (Ton länger als Bild, Standbild/Schwarzbild am Ende, Stille)
+        return f"Endkontrolle rot ({ek.get('grund') or 'Fehler im fertigen Render'}), wird nicht gepostet."
     pflicht = s.get("ton_sync_pflicht", "gruen")
     status = (c.get("ton_sync") or {}).get("status")
     if pflicht and status != pflicht:

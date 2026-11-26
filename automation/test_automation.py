@@ -150,6 +150,8 @@ class PostenProbelauf(unittest.TestCase):
             gespeichert = {}
 
             def info_lesen(self, k, d=None):
+                if k == "posten_regeln":   # YouTube-Tagesauswahl hängt sonst an der Uhrzeit (ab 17 Uhr fällt die Wahl für morgen 11 Uhr)
+                    return {"youtube_entscheid_stunden": 0}
                 return {}
 
             def info_schreiben(self, k, w):
@@ -210,6 +212,8 @@ class WunschSlots(unittest.TestCase):
             gespeichert = {}
 
             def info_lesen(self, k, d=None):
+                if k == "posten_regeln":   # YouTube-Tagesauswahl hängt sonst an der Uhrzeit (ab 17 Uhr fällt die Wahl für morgen 11 Uhr)
+                    return {"youtube_entscheid_stunden": 0}
                 return {"geplant": [dict(g) for g in geplant]}
 
             def info_schreiben(self, k, w):
@@ -314,6 +318,12 @@ class Sperren(unittest.TestCase):
         c = {"ton_sync": {"status": "gruen"}, "caption_box": {"status": "nein"}}
         self.assertIn("Caption", lib.sperrgrund({**self.ok, "checks": c}))
         c["caption_box"]["status"] = "ja"
+        self.assertIsNone(lib.sperrgrund({**self.ok, "checks": c}))
+
+    def test_endkontrolle_rot_gesperrt(self):   # 26.11.: Ton länger als Bild u. a., Ergebnis kommt vom PC
+        c = {"ton_sync": {"status": "gruen"}, "endkontrolle": {"status": "rot", "grund": "Ton 1,2 s länger als Bild"}}
+        self.assertIn("Ton 1,2 s", lib.sperrgrund({**self.ok, "checks": c}))
+        c["endkontrolle"]["status"] = "gruen"
         self.assertIsNone(lib.sperrgrund({**self.ok, "checks": c}))
 
     def test_test_clips_nie_posten(self):   # 26.11.: Gegencheck-Clips im Prüffach
