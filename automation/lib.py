@@ -741,6 +741,8 @@ def sperrgrund(karte, cfg=CONFIG, strikes=None):
         return "Alte Charge: kein neu gerendertes Original im Fach 'fertig'."
     if (c.get("caption_box") or {}).get("status") == "nein":   # 26.11. Marvin: jeder Clip braucht Caption im Bild
         return "Keine Caption im Bild, wird nicht gepostet."
+    if (c.get("wiederholung") or {}).get("status") == "rot":   # 26.11.: überlappende Teile oder doppelte Untertitel im Clip
+        return "Wiederholung im Clip (doppelter Ton oder Untertitel), wird nicht gepostet."
     pflicht = s.get("ton_sync_pflicht", "gruen")
     status = (c.get("ton_sync") or {}).get("status")
     if pflicht and status != pflicht:
