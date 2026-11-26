@@ -498,6 +498,22 @@ def _ohne_emoji(text):
     return re.sub(r"[ \t]{2,}", " ", _EMOJI.sub("", str(text or ""))).strip()
 
 
+def handles_mischen(auto, cfg=CONFIG):
+    """Geprüfte Handles (config.json) plus automatisch gefundene (info.handles von tools/handles.py, bisher nur YouTube).
+    Geprüfte gewinnen, automatische füllen nur Lücken."""
+    tabelle = [dict(h) for h in cfg.get("handles", [])]
+    for a in (auto or {}).get("auto", []) if isinstance(auto, dict) else []:
+        namen = {str(n).lower() for n in a.get("namen", [])}
+        ziel = next((h for h in tabelle if namen & {n.lower() for n in h.get("namen", [])}), None)
+        if ziel is None:
+            ziel = {"namen": list(a.get("namen", []))}
+            tabelle.append(ziel)
+        for p in ("tiktok", "instagram", "youtube"):
+            if a.get(p) and not ziel.get(p):
+                ziel[p] = a[p]
+    return tabelle
+
+
 def handles_setzen(text, plattform, cfg=CONFIG):
     """Streamer-Namen durch das geprüfte @Handle der Plattform ersetzen (nur der erste Treffer je Streamer).
     Ohne geprüftes Handle bleibt der Name stehen (lieber kein @ als ein falsches)."""
@@ -520,8 +536,16 @@ def _frage(text, cfg=CONFIG):
     return (text.rstrip(" .!") + (". " if text and not text.rstrip().endswith((".", "!")) else " ") + fragen[sum(map(ord, text)) % len(fragen)]).strip()
 
 
-def _vorlage_tags(karte, plattform, cfg=CONFIG):
+def _vorlage_tags(karte, plattform, cfg=CONFIG, trends=None, eigene=()):
+    """26.11. nachmittags (Marvin: „du musst nicht immer diese hashtags wählen, denke selber nach was passt“):
+    1. Hashtags, die der Text schon mitbringt (lokal von tools/posttext.py nach Trends gewählt), haben Vorrang.
+    2. Sonst: Spiel-Tags, passende Tages-Trends (lernen/trends.json, täglich), Streamer, dann #fyp/#viral zum Auffüllen."""
     v = cfg.get("caption_vorlage", {})
+    eig = list(dict.fromkeys("#" + str(t).lstrip("#") for t in eigene or ()))
+    if len(eig) >= 3:   # der Text bringt genug eigene mit, sonst unten auffüllen
+        if plattform == "youtube":
+            return (["#shorts"] + [t for t in eig if t.lower() != "#shorts"])[:3]
+        return eig[:5]
     text = " ".join(str(karte.get(k) or "") for k in ("titel", "caption", "art", "format")).lower()
     spiel = []
     for name, tags in v.get("spiele", {}).items():
@@ -531,9 +555,14 @@ def _vorlage_tags(karte, plattform, cfg=CONFIG):
     if not spiel:   # kein bekanntes Spiel: Streamer-Tag und #twitch statt Spiel-Tags
         st = sorted(streamer_von(karte, cfg))
         spiel = (["#" + st[0]] if st else []) + ["#twitch"]
+    trend = [t for t in trend_tags(karte, trends, cfg, ohne={x.lower() for x in spiel}) if t.lower() not in {x.lower() for x in spiel}]
+    tags = []
     if plattform == "youtube":
-        return ["#shorts"] + spiel[:1] + ["#Gaming"]
-    return (spiel[:2] + list(v.get("immer", ["#Gaming", "#viral", "#fyp"])))[:5]
+        return list(dict.fromkeys(["#shorts"] + eig + spiel[:1] + trend[:1] + ["#Gaming"]))[:3]
+    for t in eig + spiel[:2] + trend[:2] + list(v.get("immer", ["#Gaming", "#viral", "#fyp"])):
+        if t.lower() not in {x.lower() for x in tags}:
+            tags.append(t)
+    return tags[:5]
 
 
 def texte_bauen(karte, plattform, cfg=CONFIG, trends=None, titel_gesetzt=False):
@@ -545,10 +574,10 @@ def texte_bauen(karte, plattform, cfg=CONFIG, trends=None, titel_gesetzt=False):
     if plattform == "youtube" and len(titel) > 100:
         titel = titel[:99].rsplit(" ", 1)[0] + "…"
     satz = " ".join(x.strip() for x in z["beschreibung"].split("\n") if x.strip() and x.strip() != titel)
-    satz = _ohne_emoji(satz).replace("„ ", "„").replace(" “", "“")
+    satz = re.sub(r"[ \t]{2,}", " ", satz).strip()   # 26.11. nachmittags: Emojis sind erlaubt (Marvin)
     satz = _frage(satz, cfg)
     satz = handles_setzen(satz, plattform, cfg)
-    return {"titel": titel, "beschreibung": satz, "hashtags": _vorlage_tags(karte, plattform, cfg)}
+    return {"titel": titel, "beschreibung": satz, "hashtags": _vorlage_tags(karte, plattform, cfg, trends, z["hashtags"])}
 
 
 def texte_text(teile, plattform, cfg=CONFIG):

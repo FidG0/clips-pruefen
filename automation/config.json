@@ -226,47 +226,89 @@
         "Trymacs"
       ],
       "tiktok": "@trymacs",
-      "instagram": "@trymacs"
+      "instagram": "@trymacs",
+      "youtube": "@trymacs"
     },
     {
       "namen": [
         "Zarbex"
       ],
       "tiktok": "@zarbex",
-      "instagram": "@zarbex"
+      "instagram": "@zarbex",
+      "youtube": "@zarbexlive"
     },
     {
       "namen": [
         "Papaplatte"
       ],
       "tiktok": "@papaplatte",
-      "instagram": "@papaplatte"
+      "instagram": "@papaplatte",
+      "youtube": "@papaplatte"
     },
     {
       "namen": [
         "MontanaBlack",
         "Monte"
       ],
-      "tiktok": "@montanablack"
+      "tiktok": "@montanablack",
+      "instagram": "@montanablack",
+      "youtube": "@montanablack"
     },
     {
       "namen": [
         "Schradin"
       ],
-      "tiktok": "@maximalschradin"
+      "tiktok": "@maximalschradin",
+      "instagram": "@maximal_schradin",
+      "youtube": "@maximalschradin"
     },
     {
       "namen": [
         "Rewinside",
         "Rewi"
       ],
-      "tiktok": "@rewinside"
+      "tiktok": "@rewinside",
+      "youtube": "@rewinside"
+    },
+    {
+      "namen": [
+        "Eliasn97",
+        "Eli"
+      ],
+      "instagram": "@eliasn97",
+      "youtube": "@eliasn97"
     },
     {
       "namen": [
         "xQc"
       ],
-      "tiktok": "@twitch.xqc"
+      "tiktok": "@twitch.xqc",
+      "youtube": "@xqcow"
+    },
+    {
+      "namen": [
+        "CaseOh"
+      ],
+      "youtube": "@caseoh_"
+    },
+    {
+      "namen": [
+        "Knossi"
+      ],
+      "youtube": "@knossi"
+    },
+    {
+      "namen": [
+        "Nooreax"
+      ],
+      "youtube": "@nooreax"
+    },
+    {
+      "namen": [
+        "IShowSpeed",
+        "Speed"
+      ],
+      "youtube": "@ishowspeed"
     }
   ]
 }
