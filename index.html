@@ -457,8 +457,8 @@ function textEinfach(k) {   // nur falls noch kein Vorschlag da ist: Block grob 
 function texteText(t, p) {   // wie lib.texte_text
   const tags = (t.hashtags || []).map(x => "#" + String(x).trim().replace(/^#+/, "")).filter(x => x.length > 1).join(" ");
   const b = String(t.beschreibung || "").trim(), ti = String(t.titel || "").trim();
-  if (p === "tiktok") return [ti, b.replace(/\s*\n+\s*/g, " "), tags].filter(Boolean).join(" ").slice(0, 2200);
-  return (p === "youtube" ? [b, tags] : [ti, b, tags]).filter(Boolean).join("\n\n");
+  if (p === "tiktok") return [b.replace(/\s*\n+\s*/g, " "), tags].filter(Boolean).join(" ").slice(0, 2200);
+  return [b, tags].filter(Boolean).join("\n\n");
 }
 function b64url(obj) {
   const bytes = new TextEncoder().encode(JSON.stringify(obj)); let s = "";
@@ -504,7 +504,7 @@ async function textVorschau(k, wahl, titelNeu) {
     const zeigen = () => {
       const t = stand[akt];
       d.querySelectorAll(".tvtabs button").forEach(b => b.classList.toggle("an", b.dataset.p === akt));
-      $d("#tvTitelLab").textContent = akt === "youtube" ? "Titel (eigenes Titelfeld, max. 100 Zeichen)" : "Erste Zeile (Hook, " + PNAME[akt] + " hat kein Titelfeld)";
+      $d("#tvTitelLab").textContent = akt === "youtube" ? "Titel (eigenes Titelfeld, max. 100 Zeichen)" : "Titel (nur Anzeige, auf " + PNAME[akt] + " steht er schon im Video, nicht in der Beschreibung)";
       $d("#tvTitel").value = t.titel; $d("#tvBesch").value = t.beschreibung; $d("#tvTags").value = t.hashtags.join(" ");
       neu();
     };
