@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   apk:
@@ -45,3 +45,14 @@ jobs:
           name: clipwreck-apk-unsigniert
           path: aus/
           retention-days: 14
+      # Zusätzlich auf den Branch apk-bau legen (wird jedes Mal überschrieben). Claudes Umgebung kommt
+      # an Artefakte nicht ran, an Git schon. Die Datei ist unsigniert und enthält keine Geheimnisse.
+      - name: Auf Branch apk-bau legen
+        run: |
+          cd aus
+          git init -q -b apk-bau
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -qm "APK $(cat version.txt) aus ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" apk-bau
