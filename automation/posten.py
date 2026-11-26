@@ -70,14 +70,14 @@ def alter_text(g):
     return bool(re.search(r"(?i)(^|\s)(titel|beschreibung)\s*:", t) or re.search(r"(?i)youtube shorts\s*:", t))
 
 
-def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt):
+def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt, yt=None):
     """25.11. (Marvins Ja nötig): geplante Posts mit dem alten Block-Text in Buffer per editPost auf saubere Texte setzen.
     Läuft nur, wenn info.texte_korrektur.freigabe true ist. Vorher wird Buffer gefragt, welche Posts schon gesendet sind:
     die bleiben unberührt und werden nur gemeldet. Ohne Freigabe oder im Probelauf: nur Vorschau."""
     auftrag = sb.info_lesen("texte_korrektur", {}) or {}
     kandidaten = []
     for g in zustand["geplant"]:
-        if g.get("status") != "geplant" or not g.get("buffer_id") or not alter_text(g):
+        if g.get("status") != "geplant" or not (g.get("buffer_id") or g.get("youtube_id")):
             continue
         try:
             slot = dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00"))
@@ -106,9 +106,11 @@ def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt
         pf = g.get("plattform", "tiktok")
         teile, sperre = texte_fuer(a, k, pf, trends)
         neu, meta = texte_text(teile, pf), metadata_bauen(k, pf, teile=teile)
-        zeile = {"buffer_id": g["buffer_id"], "plattform": pf, "slot_lokal": g.get("slot_lokal"), "titel": teile.get("titel"),
+        if neu == g.get("text") and not alter_text(g):
+            continue   # schon im aktuellen Format
+        zeile = {"buffer_id": g.get("buffer_id") or g.get("youtube_id"), "plattform": pf, "slot_lokal": g.get("slot_lokal"), "titel": teile.get("titel"),
                  "alt": g.get("text"), "neu": neu, "meta": meta}
-        if g["buffer_id"] in gesendet:
+        if g.get("buffer_id") and g["buffer_id"] in gesendet:
             zeile["status"] = "schon veröffentlicht, nicht angefasst"
             g["status"] = "gesendet"
         elif slot <= jetzt + dt.timedelta(minutes=3):
@@ -117,8 +119,14 @@ def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt
             zeile["status"] = "gesperrt: " + sperre
         elif darf:
             try:
-                antwort = buf.post_bearbeiten(g["buffer_id"], neu, meta) or {}
-                g.update(text=neu, metadata=meta, teile=teile, titel=teile.get("titel"), hinweis="Text am 25.11. korrigiert.")
+                if g.get("weg") == "direkt":   # 26.11.: direkte YouTube-Uploads per videos.update
+                    if yt is None:
+                        raise RuntimeError("kein YouTube-Zugang")
+                    yt.bearbeiten(g["youtube_id"], teile, (meta or {}).get("youtube", {}).get("categoryId", "20"))
+                    antwort = {"dueAt": g["slot_utc"]}
+                else:
+                    antwort = buf.post_bearbeiten(g["buffer_id"], neu, meta) or {}
+                g.update(text=neu, metadata=meta, teile=teile, titel=teile.get("titel"), hinweis="Text an Marvins Vorlage angepasst.")
                 zeile["status"] = "korrigiert"
                 try:   # Buffer-Doku: dueAt weglassen = unverändert. Hier nachgeprüft statt geglaubt.
                     neu_due = dt.datetime.fromisoformat(str(antwort.get("dueAt")).replace("Z", "+00:00"))
@@ -150,7 +158,7 @@ def buffer_abgleich(zustand, buf, org_id, kanaele):
     for g in zustand["geplant"]:
         if g.get("status") != "geplant" or not g.get("buffer_id") or g.get("weg") == "direkt":
             continue
-        if g["buffer_id"] in gesendet:
+        if g.get("buffer_id") and g["buffer_id"] in gesendet:
             g["status"] = "gesendet"
         elif g["buffer_id"] not in da:
             g.update(status="geloescht", hinweis="In Buffer gelöscht (25.11.), Slot ist wieder frei.")
@@ -572,6 +580,7 @@ def main():
             teile_yt = texte["youtube"][0]
             ab_yt = (slots.get("tiktok") or jetzt) + dt.timedelta(hours=r["versatz_stunden"].get("youtube", 0))
             w = {"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": a.get("titel") or k.get("titel"), "teile": teile_yt,
+                 "eigen": bool(texte_aus_kommentar(a.get("kommentar")).get("youtube")), "titel_gesetzt": bool(a.get("titel")),
                  "wert": clip_wert(k, trends), "ab_utc": ab_yt.isoformat(), "erstellt": jetzt.isoformat(), "bucket": bucket, "pfad": pfad,
                  "karte": {x: k.get(x) for x in ("titel", "art", "format", "kanal", "dauer", "laenge")},
                  "meta": metadata_bauen(k, "youtube", teile=teile_yt)}
@@ -585,6 +594,16 @@ def main():
 
     def senden_warte(w, slot):
         auftrag = {"id": w["auftrag_id"], "karte_id": w["karte_id"], "titel": w.get("titel"), "karten": w.get("karte") or {}}
+        if not w.get("eigen"):   # nicht von Marvin bearbeitet: Text jetzt nach dem aktuellen Baukasten bauen
+            try:
+                q = urllib.parse.urlencode({"select": "*", "id": "eq." + w["karte_id"]})
+                frisch = (sb.holen("karten", q) or [None])[0]
+                if frisch:
+                    kk = {**frisch, **({"titel": w["titel"]} if w.get("titel_gesetzt") else {})}
+                    w["teile"] = texte_bauen(kk, "youtube", trends=trends, titel_gesetzt=bool(w.get("titel_gesetzt")))
+                    w["meta"] = metadata_bauen(kk, "youtube", teile=w["teile"])
+            except Exception as fehler:   # dann eben der gespeicherte Text
+                print(f"YouTube-Text nicht neu gebaut: {fehler}")
         text = texte_text(w["teile"], "youtube")
         e = eintrag(auftrag, "youtube", slot, text, w.get("meta"))
         e.update(teile=w["teile"], auswahl=f"beste {r['youtube_pro_tag']} des Tages, Wert {w['wert']:.0f}")
@@ -601,7 +620,7 @@ def main():
         youtube_warte_planen(zustand, r, jetzt, senden_warte, ist_live, probe)
 
     try:
-        texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt)
+        texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt, yt)
     except Exception as fehler:   # Korrektur darf das normale Posten nie blockieren
         print(f"Korrektur nicht gelaufen: {fehler}")
     try:

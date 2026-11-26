@@ -148,10 +148,8 @@
     ]
   },
   "hashtags_nie": [
-    "#fyp",
     "#fy",
     "#foryou",
-    "#viral",
     "#reels"
   ],
   "trend_hashtags": {
@@ -201,5 +199,74 @@
     "trymacs",
     "zarbex",
     "rohat"
+  ],
+  "caption_vorlage": {
+    "beispiel": "@GetOnMyLvL findet @SCHRADIN in GTA 6 und kennt keine Gnade Wer hätte das gedacht? Wen würdest du im Spiel zuerst verprügeln? #gta6 #gta #Gaming #viral #fyp",
+    "spiele": {
+      "gta": [
+        "#gta6",
+        "#gta"
+      ]
+    },
+    "immer": [
+      "#Gaming",
+      "#viral",
+      "#fyp"
+    ],
+    "fragen": [
+      "Wer hätte das gedacht?",
+      "Was hättet ihr gemacht?",
+      "Wie hättet ihr reagiert?",
+      "Was sagt ihr dazu?"
+    ]
+  },
+  "handles": [
+    {
+      "namen": [
+        "Trymacs"
+      ],
+      "tiktok": "@trymacs",
+      "instagram": "@trymacs"
+    },
+    {
+      "namen": [
+        "Zarbex"
+      ],
+      "tiktok": "@zarbex",
+      "instagram": "@zarbex"
+    },
+    {
+      "namen": [
+        "Papaplatte"
+      ],
+      "tiktok": "@papaplatte",
+      "instagram": "@papaplatte"
+    },
+    {
+      "namen": [
+        "MontanaBlack",
+        "Monte"
+      ],
+      "tiktok": "@montanablack"
+    },
+    {
+      "namen": [
+        "Schradin"
+      ],
+      "tiktok": "@maximalschradin"
+    },
+    {
+      "namen": [
+        "Rewinside",
+        "Rewi"
+      ],
+      "tiktok": "@rewinside"
+    },
+    {
+      "namen": [
+        "xQc"
+      ],
+      "tiktok": "@twitch.xqc"
+    }
   ]
 }

@@ -486,50 +486,80 @@ def trend_tags(karte, trends, cfg=CONFIG, ohne=()):
     return aus[: t_cfg.get("max", 2)]
 
 
+# 26.11. Marvins Vorlage (sein eigener Post, gilt auf ALLEN Plattformen):
+#   „@GetOnMyLvL findet @SCHRADIN in GTA 6 und kennt keine Gnade Wer hätte das gedacht? Wen würdest du im Spiel zuerst
+#    verprügeln?“  dann  #gta6 #gta #Gaming #viral #fyp
+# Also: kein Titel in der Beschreibung (der Titel steht schon groß im Video), Streamer als @Handle, ein kurzer natürlicher
+# Satz, eine Frage ans Publikum, keine Emojis, keine Quellenzeile, 5 Hashtags nach Vorlage.
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D\u2190-\u21FF\u2300-\u23FF]+")
+
+
+def _ohne_emoji(text):
+    return re.sub(r"[ \t]{2,}", " ", _EMOJI.sub("", str(text or ""))).strip()
+
+
+def handles_setzen(text, plattform, cfg=CONFIG):
+    """Streamer-Namen durch das geprüfte @Handle der Plattform ersetzen (nur der erste Treffer je Streamer).
+    Ohne geprüftes Handle bleibt der Name stehen (lieber kein @ als ein falsches)."""
+    for h in cfg.get("handles", []):
+        ziel = h.get(plattform)
+        if not ziel:
+            continue
+        for name in sorted(h.get("namen", []), key=len, reverse=True):
+            m = re.search(r"(?<![@\w])" + re.escape(name) + r"(?:s(?=\s))?(?!\w)", text, re.I)
+            if m:
+                text = text[:m.start()] + ziel + text[m.end():]
+                break
+    return text
+
+
+def _frage(text, cfg=CONFIG):
+    if "?" in text:
+        return text
+    fragen = cfg.get("caption_vorlage", {}).get("fragen", ["Was sagt ihr dazu?"])
+    return (text.rstrip(" .!") + (". " if text and not text.rstrip().endswith((".", "!")) else " ") + fragen[sum(map(ord, text)) % len(fragen)]).strip()
+
+
+def _vorlage_tags(karte, plattform, cfg=CONFIG):
+    v = cfg.get("caption_vorlage", {})
+    text = " ".join(str(karte.get(k) or "") for k in ("titel", "caption", "art", "format")).lower()
+    spiel = []
+    for name, tags in v.get("spiele", {}).items():
+        if name.lower() in text:
+            spiel = list(tags)
+            break
+    if not spiel:   # kein bekanntes Spiel: Streamer-Tag und #twitch statt Spiel-Tags
+        st = sorted(streamer_von(karte, cfg))
+        spiel = (["#" + st[0]] if st else []) + ["#twitch"]
+    if plattform == "youtube":
+        return ["#shorts"] + spiel[:1] + ["#Gaming"]
+    return (spiel[:2] + list(v.get("immer", ["#Gaming", "#viral", "#fyp"])))[:5]
+
+
 def texte_bauen(karte, plattform, cfg=CONFIG, trends=None, titel_gesetzt=False):
-    """Vorschlag je Plattform: {'titel', 'beschreibung', 'hashtags': [...]}. titel = YouTube-Titel bzw. erste Zeile (Hook).
-    titel_gesetzt: Marvin hat beim Posten einen eigenen Titel gewählt, der gilt dann auch für YouTube."""
-    p = cfg.get("plattformen", {}).get(plattform, {})
+    """Vorschlag je Plattform nach Marvins Vorlage: {'titel' (nur YouTube-Titelfeld), 'beschreibung', 'hashtags'}."""
     z = texte_zerlegen(karte)
     titel = z["titel"]
     if plattform == "youtube" and z["yt_titel"] and not (titel_gesetzt or z["titel_geaendert"]):
         titel = z["yt_titel"]
     if plattform == "youtube" and len(titel) > 100:
         titel = titel[:99].rsplit(" ", 1)[0] + "…"
-    beschreibung = z["beschreibung"]
-    quelle = z["quelle"]
-    if not quelle:
-        quelle = _quelle_bauen(karte, z["titel"])
-    if quelle:
-        beschreibung = (beschreibung + "\n\n" + quelle).strip()
-    # Reihenfolge = Wichtigkeit: Plattform-Pflicht (#shorts), die 3 Tags des Clips, passende Trends, Rest, Creator/Format/Marke
-    eigene = z["hashtags"]
-    trend = trend_tags(karte, trends, cfg, ohne={t.lower() for t in eigene})
-    tags = list(p.get("hashtags_extra", [])) + eigene[:3] + trend + eigene[3:] + _hashtags(karte, cfg, set())
-    im_text = {t.lower() for t in _tags_aus(titel + " " + beschreibung)}
-    max_tags = max(0, p.get("max_hashtags", cfg["max_hashtags"]) - len(im_text))
-    nie = {x.lower() for x in p.get("hashtags_nie", cfg.get("hashtags_nie", []))}
-    neu = []
-    for t in tags:
-        t = "#" + str(t).strip().lstrip("#")
-        if len(t) < 2 or t.lower() in im_text or t.lower() in nie or t.lower() in {x.lower() for x in neu} or _gluecksspiel(t, cfg):
-            continue
-        neu.append(t)
-    return {"titel": titel, "beschreibung": beschreibung, "hashtags": neu[:max_tags]}
+    satz = " ".join(x.strip() for x in z["beschreibung"].split("\n") if x.strip() and x.strip() != titel)
+    satz = _ohne_emoji(satz).replace("„ ", "„").replace(" “", "“")
+    satz = _frage(satz, cfg)
+    satz = handles_setzen(satz, plattform, cfg)
+    return {"titel": titel, "beschreibung": satz, "hashtags": _vorlage_tags(karte, plattform, cfg)}
 
 
 def texte_text(teile, plattform, cfg=CONFIG):
-    """Feld text für Buffer aus {'titel','beschreibung','hashtags'}.
-    TikTok: eine Zeile (API kann keine Umbrüche), Hook vorne. YouTube: Titel steht im Titelfeld, hier nur Beschreibung.
-    Instagram: Hook, Absatz, Beschreibung, Absatz, Hashtags."""
+    """Feld text für Buffer bzw. YouTube-Beschreibung: Satz, dann Hashtags. Der Titel kommt nie in die Beschreibung
+    (Marvin 26.11.). TikTok in einer Zeile (API kann keine Umbrüche), sonst Hashtags in einer eigenen Zeile."""
     p = cfg.get("plattformen", {}).get(plattform, {})
-    titel = str(teile.get("titel") or "").strip()
     besch = str(teile.get("beschreibung") or "").strip()
     tags = " ".join("#" + str(t).strip().lstrip("#") for t in (teile.get("hashtags") or []) if str(t).strip().lstrip("#"))
     if plattform == "tiktok":
-        return " ".join(x for x in (titel, re.sub(r"\s*\n+\s*", " ", besch), tags) if x).strip()[:2200]
-    stuecke = [besch, tags] if plattform == "youtube" else [titel, besch, tags]
-    return "\n\n".join(x for x in stuecke if x).strip()[:p.get("max_zeichen", 2200)]
+        return " ".join(x for x in (re.sub(r"\s*\n+\s*", " ", besch), tags) if x).strip()[:2200]
+    return "\n\n".join(x for x in (besch, tags) if x).strip()[:p.get("max_zeichen", 2200)]
 
 
 def texte_pruefen(teile, plattform, cfg=CONFIG):
@@ -739,6 +769,14 @@ class YouTube:
             raise RuntimeError("YouTube gab keine Upload-Adresse zurück.")
         _, _, roh = _roh(ziel, "PUT", video, self._kopf({"Content-Type": "video/mp4", "Content-Length": str(len(video))}), 600)
         return json.loads(roh)["id"]
+
+    def bearbeiten(self, video_id, teile, kategorie):
+        """Titel, Beschreibung und Tags eines Videos ändern (videos.update, 50 Einheiten). Status bleibt."""
+        tags = [str(t).lstrip("#") for t in teile.get("hashtags") or [] if str(t).lstrip("#")]
+        body = {"id": video_id, "snippet": {"title": re.sub(r"\s+", " ", teile.get("titel") or "Clip").strip()[:100],
+                                            "description": texte_text(teile, "youtube")[:4900], "tags": tags[:30],
+                                            "categoryId": str(kategorie or "20"), "defaultLanguage": "de"}}
+        _roh(f"{YT_API}/videos?part=snippet", "PUT", json.dumps(body).encode(), self._kopf({"Content-Type": "application/json"}), 60)
 
     def loeschen(self, video_id):
         _roh(f"{YT_API}/videos?id={urllib.parse.quote(video_id)}", "DELETE", kopf=self._kopf(), timeout=60)

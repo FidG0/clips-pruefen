@@ -40,7 +40,7 @@ class Caption(unittest.TestCase):
         t = lib.caption_bauen(k)
         self.assertNotIn("\n", t)
         self.assertEqual(t.lower().count("#gta6"), 1)
-        self.assertIn("#zarbex", t)
+        self.assertTrue(t.endswith("#gta6 #gta #Gaming #viral #fyp"))   # 26.11.: Marvins Vorlage
         self.assertLessEqual(len([w for w in t.split() if w.startswith("#")]), 6)
 
     def test_titeltyp(self):
@@ -453,7 +453,7 @@ class Texte(unittest.TestCase):
                 self.assertIsNone(lib.texte_pruefen(t, p), (p, text))
                 if p == "tiktok":
                     self.assertNotIn("\n", text)
-                    self.assertTrue(text.startswith(k["titel"]))
+                    self.assertFalse(text.startswith(k["titel"]))   # 26.11.: kein Titel in der Beschreibung
                 if p == "instagram":
                     self.assertLessEqual(len(set(lib._tags_aus(text))), 5)
                 if p == "youtube":
@@ -465,9 +465,10 @@ class Texte(unittest.TestCase):
 
     def test_quelle_als_eigener_satz(self):
         t = lib.texte_bauen(self.karten()[0], "instagram")
-        self.assertIn("\n\n🎥 Trymacs auf Twitch (Fanpage, eigener Schnitt)", t["beschreibung"])
+        self.assertNotIn("Fanpage", t["beschreibung"])   # 26.11.: keine Quellenzeile mehr
+        self.assertTrue(t["beschreibung"].startswith("@trymacs "))
         x = lib.texte_bauen(self.karten()[1], "tiktok")
-        self.assertIn("🎥 xQc (Fanpage, eigener Schnitt)", x["beschreibung"])
+        self.assertTrue(x["beschreibung"].startswith("@twitch.xqc "))
 
     def test_youtube_titel_aus_shorts_zeile(self):
         k = self.karten()[1]
@@ -510,7 +511,7 @@ class TexteImJob(unittest.TestCase):
         t = {p: {"titel": "Mein Hook 💀", "beschreibung": "Mein Satz.", "hashtags": ["#zarbex"]} for p in ("tiktok", "youtube", "instagram")}
         z = WunschSlots()._lauf("[posten] " + lib.texte_kommentar(t))
         tik = next(e for e in z if e["plattform"] == "tiktok")
-        self.assertEqual(tik["text"], "Mein Hook 💀 Mein Satz. #zarbex")
+        self.assertEqual(tik["text"], "Mein Satz. #zarbex")   # Titel nie in der Beschreibung
         yt = WunschSlots.letzter_zustand["youtube_warte_probe"][0]
         self.assertEqual(yt["meta"]["youtube"]["title"], "Mein Hook 💀")
 
@@ -556,13 +557,13 @@ class TexteImJob(unittest.TestCase):
         sb = Sb({})
         posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, True, None, jetzt)
         self.assertEqual(Buf.bearbeitet, [])                       # ohne Freigabe nichts
-        self.assertEqual(len(sb.geschrieben["texte_korrektur"]["vorschau"]), 2)
+        self.assertEqual(len(sb.geschrieben["texte_korrektur"]["vorschau"]), 3)   # 26.11.: alles, was nicht Marvins Vorlage entspricht
         sb = Sb({"freigabe": True})
         posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, True, None, jetzt)
-        self.assertEqual([i for i, _ in Buf.bearbeitet], ["b1"])     # b2 ist schon gesendet, b3 schon sauber
+        self.assertEqual([i for i, _ in Buf.bearbeitet], ["b1", "b3"])     # b2 ist schon gesendet
         self.assertNotIn("Titel:", Buf.bearbeitet[0][1])
         erg = {e["buffer_id"]: e["status"] for e in sb.geschrieben["texte_korrektur"]["ergebnis"]}
-        self.assertEqual(erg, {"b1": "korrigiert", "b2": "schon veröffentlicht, nicht angefasst"})
+        self.assertEqual(erg, {"b1": "korrigiert", "b2": "schon veröffentlicht, nicht angefasst", "b3": "korrigiert"})
         self.assertFalse(sb.geschrieben["texte_korrektur"]["freigabe"])
         self.assertEqual(z["geplant"][1]["status"], "gesendet")
         Buf.bearbeitet = []
@@ -785,3 +786,28 @@ class FuenfSlots(unittest.TestCase):
         offen = [{"id": 1, "karten": {"zeit": "2026-11-20T10:00:00+00:00"}}, {"id": 2, "karten": {"zeit": "2026-11-25T22:00:00+00:00"}},
                  {"id": 3, "karten": {}, "erstellt": "2026-11-23T10:00:00+00:00"}]
         self.assertEqual([a["id"] for a in posten.aktuelle_zuerst(offen)], [2, 3, 1])
+
+
+class MarvinsVorlage(unittest.TestCase):
+    def test_wie_marvins_beispiel(self):
+        k = {"titel": "Monte findet „Schradin“ in GTA 6 und verprügelt ihn 💀", "art": "Fanpage-Clip",
+             "caption": "Monte findet Schradin in GTA 6 und kennt keine Gnade 💀 Wer hätte das gedacht? Wen würdest du im Spiel zuerst verprügeln? 👇"}
+        t = lib.texte_text(lib.texte_bauen(k, "tiktok"), "tiktok")
+        self.assertEqual(t, "@montanablack findet @maximalschradin in GTA 6 und kennt keine Gnade Wer hätte das gedacht? "
+                            "Wen würdest du im Spiel zuerst verprügeln? #gta6 #gta #Gaming #viral #fyp")
+        ig = lib.texte_text(lib.texte_bauen(k, "instagram"), "instagram")
+        self.assertNotIn("Monte findet „Schradin“", ig)          # Titel nie in der Beschreibung
+        self.assertTrue(ig.endswith("\n\n#gta6 #gta #Gaming #viral #fyp"))
+        yt = lib.texte_bauen(k, "youtube")
+        self.assertEqual(yt["titel"], k["titel"])
+        self.assertEqual(yt["hashtags"], ["#shorts", "#gta6", "#Gaming"])
+
+    def test_frage_wird_ergaenzt_und_ohne_emoji(self):
+        t = lib.texte_bauen({"titel": "x", "caption": "Zarbex crasht in GTA 6 😭"}, "tiktok")
+        self.assertIn("?", t["beschreibung"])
+        self.assertNotIn("😭", t["beschreibung"])
+        self.assertTrue(t["beschreibung"].startswith("@zarbex crasht"))
+
+    def test_ohne_spiel_streamer_tag(self):
+        t = lib.texte_bauen({"titel": "x", "caption": "Papaplatte lacht sich kaputt. Warum?", "kanal": "papaplatte"}, "instagram")
+        self.assertEqual(t["hashtags"], ["#papaplatte", "#twitch", "#Gaming", "#viral", "#fyp"])
