@@ -349,6 +349,13 @@ def youtube_warte_planen(zustand, r, jetzt, senden, ist_live, probe, cfg=CONFIG)
             print(f"youtube   {e['status']:9} {e['slot_lokal']}  {e['titel']}  (Wert {w['wert']:.0f}, beste {r['youtube_pro_tag']} des Tages)")
 
 
+def aktuelle_zuerst(offen):
+    def schluessel(a):
+        k = a.get("karten") or {}
+        return str(k.get("zeit") or a.get("erstellt") or "")
+    return sorted(offen, key=schluessel, reverse=True)
+
+
 def videodatei(karte):
     """(bucket, pfad): Original aus 'fertig' bevorzugt, sonst Vorschau."""
     if karte.get("datei"):
@@ -428,6 +435,9 @@ def main():
             print(f"Buffer-Abgleich nicht gelaufen: {fehler}")
 
     offen = stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt, yt)
+    # 26.11. (Marvin: Clips werden unaktuell, andere posten schneller): die neuesten Momente bekommen die frühesten
+    # Slots. Sortiert nach Zeitpunkt des Moments (karten.zeit), ohne Zeit nach Freigabe. Ältere warten auf spätere Slots.
+    offen = aktuelle_zuerst(offen)
     # 26.11.: erst zurücknehmen („Überarbeiten“, „×“), dann neue Freigaben. So wird nie ein zurückgenommener Clip geplant.
     fertig_rueck, rueck_sperren = rueckzuege_anwenden(rueck, zustand, buf, ist_live, yt)
     if ist_live:

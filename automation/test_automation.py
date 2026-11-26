@@ -18,7 +18,7 @@ class Slots(unittest.TestCase):
     def test_naechster_slot_heute(self):
         jetzt = dt.datetime(2026, 11, 24, 10, 0, tzinfo=BER).astimezone(UTC)
         s = lib.naechster_slot(set(), jetzt).astimezone(BER)
-        self.assertEqual((s.day, s.hour, s.minute), (24, 13, 0))
+        self.assertEqual((s.day, s.hour, s.minute), (24, 11, 0))   # 26.11.: erster Slot 11:00
 
     def test_belegt_und_vorlauf(self):
         jetzt = dt.datetime(2026, 11, 24, 18, 50, tzinfo=BER).astimezone(UTC)  # 19:00 nur 10 Min entfernt (Vorlauf 15)
@@ -26,12 +26,12 @@ class Slots(unittest.TestCase):
         self.assertEqual((s.hour, s.minute), (20, 30))
         belegt = {s.astimezone(UTC).isoformat()}
         s2 = lib.naechster_slot(belegt, jetzt).astimezone(BER)
-        self.assertEqual((s2.day, s2.hour), (25, 13))  # 22:00 ist Bonus, nie automatisch
+        self.assertEqual((s2.day, s2.hour), (25, 11))  # 22:00 ist Bonus, nie automatisch
 
     def test_sommerzeit(self):
         jetzt = dt.datetime(2026, 7, 1, 8, 0, tzinfo=BER).astimezone(UTC)
         s = lib.naechster_slot(set(), jetzt)
-        self.assertEqual(s.hour, 11)  # 13:00 MESZ = 11:00 UTC
+        self.assertEqual(s.hour, 9)  # 11:00 MESZ = 09:00 UTC
 
 
 class Caption(unittest.TestCase):
@@ -576,7 +576,7 @@ class YoutubeGrenze(unittest.TestCase):
         jetzt = dt.datetime(2026, 11, 26, 8, 0, tzinfo=BER).astimezone(UTC)
         zwei = {lib.slot_aus_lokal("2026-11-26T13:00").isoformat(), lib.slot_aus_lokal("2026-11-26T16:00").isoformat()}
         self.assertEqual(lib.naechster_slot(zwei, jetzt, plattform="youtube").astimezone(BER).day, 27)
-        self.assertEqual(lib.naechster_slot(zwei, jetzt, plattform="tiktok").astimezone(BER).hour, 19)
+        self.assertEqual(lib.naechster_slot(zwei, jetzt, plattform="tiktok").astimezone(BER).hour, 11)
         self.assertIn("2 Posts", lib.slot_pruefen(lib.slot_aus_lokal("2026-11-26T19:00"), zwei, jetzt, plattform="youtube"))
         self.assertIsNone(lib.slot_pruefen(lib.slot_aus_lokal("2026-11-26T19:00"), zwei, jetzt, plattform="tiktok"))
 
@@ -660,7 +660,7 @@ class VersetztUndBeste(unittest.TestCase):
         posten.youtube_warte_planen(z, r, jetzt, senden, True, [])
         self.assertEqual([k for k, _ in gesendet], ["k2", "k3"])          # die 2 besten des Tages
         self.assertEqual([w["karte_id"] for w in z["youtube_warte"]], ["k1"])
-        self.assertEqual(gesendet[0][1], "26 13:00")
+        self.assertEqual(gesendet[0][1], "26 11:00")
 
     def test_zu_frueh_wird_nicht_entschieden(self):
         import posten
@@ -767,3 +767,21 @@ class StrikeRaeumen(unittest.TestCase):
         self.assertEqual(Buf.weg, ["b1"])
         self.assertEqual([g["status"] for g in z["geplant"]], ["storniert", "geplant", "gesendet"])
         self.assertEqual(len(z["youtube_warte"]), 1)
+
+
+class FuenfSlots(unittest.TestCase):
+    def test_fuenf_feste_slots_pro_tag(self):
+        jetzt = dt.datetime(2026, 11, 26, 8, 0, tzinfo=BER).astimezone(UTC)
+        belegt, tage = set(), []
+        for _ in range(5):
+            s = lib.naechster_slot(belegt, jetzt, plattform="tiktok")
+            belegt.add(s.isoformat())
+            tage.append(s.astimezone(BER).strftime("%d %H:%M"))
+        self.assertEqual(tage, ["26 11:00", "26 13:00", "26 16:00", "26 19:00", "26 20:30"])
+        self.assertEqual(lib.naechster_slot(belegt, jetzt, plattform="tiktok").astimezone(BER).strftime("%d %H:%M"), "27 11:00")
+
+    def test_neueste_momente_zuerst(self):
+        import posten
+        offen = [{"id": 1, "karten": {"zeit": "2026-11-20T10:00:00+00:00"}}, {"id": 2, "karten": {"zeit": "2026-11-25T22:00:00+00:00"}},
+                 {"id": 3, "karten": {}, "erstellt": "2026-11-23T10:00:00+00:00"}]
+        self.assertEqual([a["id"] for a in posten.aktuelle_zuerst(offen)], [2, 3, 1])

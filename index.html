@@ -394,7 +394,7 @@ async function pruefenQueue(ziel) {
 }
 // 25.11.: Slot selbst wählen (wie der Kalender in der Zentrale). Gleiche Regeln wie automation/lib.py slot_pruefen:
 // 4 feste Slots plus Bonus 22:00 (Berliner Zeit), 30 Min Vorlauf, frei auf allen drei Plattformen, max. 5 pro Tag. posten.py prüft nochmal.
-const SLOTS = ["13:00", "16:00", "19:00", "20:30", "22:00"], BONUS = ["22:00"], PLATTF = ["tiktok", "youtube", "instagram"], VORLAUF_MIN = 30, MAX_TAG = 5, BUFFER_MAX = 10;
+const SLOTS = ["11:00", "13:00", "16:00", "19:00", "20:30", "22:00"], BONUS = ["22:00"], PLATTF = ["tiktok", "youtube", "instagram"], VORLAUF_MIN = 15, MAX_TAG = 6, BUFFER_MAX = 10;   // 26.11.: 5 feste Slots plus Bonus
 let slotCache = { t: 0, geplant: [] };
 function berlinUtc(datum, hhmm) {   // "2026-11-26", "16:00" (Berliner Wanduhr) -> Date in UTC, unabhängig von der Handy-Zeitzone
   const [y, m, d] = datum.split("-").map(Number), [h, mi] = hhmm.split(":").map(Number);
