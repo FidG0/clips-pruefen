@@ -505,17 +505,9 @@ def main():
         ziel = [p for p in ziel if p not in doppelt]
         if doppelt:
             print(f"doppelt   {k.get('titel')}: schon geplant auf {', '.join(doppelt)}")
-        # 26.11. (Marvin): auch nicht auf einer Plattform, auf der der Clip schon GESENDET wurde. Sonst lief z. B. derselbe
-        # Clip zweimal auf Reels, weil eine zweite Freigabe alle Plattformen neu plante. Ausnahme: „Nochmal hochladen“ ([nochmal]).
-        if "[nochmal]" not in str(a.get("kommentar") or ""):
-            schon = [p for p in ziel if any(g.get("karte_id") == a["karte_id"] and g.get("plattform", "tiktok") == p
-                                            and g.get("status") == "gesendet" for g in zustand["geplant"])]
-            ziel = [p for p in ziel if p not in schon]
-            if schon:
-                print(f"gesendet  {k.get('titel')}: lief schon auf {', '.join(schon)}, wird übersprungen")
         if not ziel:
             gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"),
-                             "grund": "Schon auf allen Plattformen gepostet oder geplant, kein Doppelpost."})
+                             "grund": "Schon auf allen Plattformen geplant, kein Doppelpost."})
             if ist_live:
                 zustand["erledigte_auftraege"].append(a["id"])
             continue
