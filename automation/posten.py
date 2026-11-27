@@ -72,6 +72,15 @@ def alter_text(g):
     return bool(re.search(r"(?i)(^|\s)(titel|beschreibung)\s*:", t) or re.search(r"(?i)youtube shorts\s*:", t))
 
 
+def texte_gleich_ohne_tags(a, b):
+    """27.11.: Trend-Hashtags wechseln zwischen Planen und Korrektur-Lauf. Gleicher Text ohne Hashtags = in der Vorlage."""
+    from lib import _ohne_tags
+
+    def norm(t):
+        return re.sub(r"\s+", " ", _ohne_tags(t or "")).strip()
+    return norm(a) == norm(b)
+
+
 def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt, yt=None):
     """25.11. (Marvins Ja nötig): geplante Posts mit dem alten Block-Text in Buffer per editPost auf saubere Texte setzen.
     Läuft nur, wenn info.texte_korrektur.freigabe true ist. Vorher wird Buffer gefragt, welche Posts schon gesendet sind:
@@ -110,6 +119,8 @@ def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt
         neu, meta = texte_text(teile, pf), metadata_bauen(k, pf, teile=teile)
         if neu == g.get("text") and not alter_text(g):
             continue   # schon im aktuellen Format
+        if not alter_text(g) and texte_gleich_ohne_tags(neu, g.get("text")):
+            continue   # 27.11.: nur Trend-Hashtags gewandert (wechseln je Lauf), kein Vorlagen-Verstoß, nichts anfassen
         zeile = {"buffer_id": g.get("buffer_id") or g.get("youtube_id"), "plattform": pf, "slot_lokal": g.get("slot_lokal"), "titel": teile.get("titel"),
                  "alt": g.get("text"), "neu": neu, "meta": meta}
         if g.get("buffer_id") and g["buffer_id"] in gesendet:
@@ -141,6 +152,7 @@ def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt
                 zeile["status"] = "Fehler: " + str(fehler)[:200]
         else:
             zeile["status"] = "Vorschau (wartet auf Freigabe)"
+            print(f"vorschau  {pf} {g.get('slot_lokal')}\n  alt: {(g.get('text') or '')[:160]!r}\n  neu: {neu[:160]!r}")
         (ergebnis if darf else vorschau).append(zeile)
         print(f"korrektur {pf:9} {zeile['status']}  {g.get('slot_lokal')}  {teile.get('titel')}")
     if darf:

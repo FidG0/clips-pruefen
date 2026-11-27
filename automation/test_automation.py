@@ -1443,6 +1443,15 @@ class Einfrieren(unittest.TestCase):
         self.assertTrue(all(w["pfad"] == "eingefroren/31_npc_v4.mp4" for w in z.get("youtube_warte", []) if w["karte_id"] == "k31"))
 
 
+class TexteDrift(unittest.TestCase):
+    def test_nur_hashtags_gewandert(self):
+        import posten
+        a = "Zarbex crasht in den LKW 😂 Wer fährt auch aufs Handy?\n\n#gta6 #zarbex #fail"
+        b = "Zarbex crasht in den LKW 😂 Wer fährt auch aufs Handy?\n\n#gta6 #zarbex #streamingdeutschland"
+        self.assertTrue(posten.texte_gleich_ohne_tags(a, b))
+        self.assertFalse(posten.texte_gleich_ohne_tags(a, "Zarbex crasht 😂\n\n#gta6"))
+
+
 class YouTubeZahlen(unittest.TestCase):
     def test_analytics_in_metriken(self):
         import zahlen
