@@ -57,6 +57,8 @@ def profil_einmischen(metriken, profil):
     for vid, v in ((profil or {}).get("videos") or {}).items():
         if not v.get("verlauf"):
             continue
+        if v.get("post_key"):   # vorher nur auf dem Profil, jetzt einem Post zugeordnet: kein Doppel im Lernen
+            metriken.pop("tt:" + vid, None)
         schluessel = v.get("post_key") or "tt:" + vid
         e = metriken.setdefault(schluessel, {"meta": {}, "verlauf": {}})
         if not v.get("post_key"):   # nur auf dem Profil gefunden, kein Buffer-Post dazu
@@ -87,6 +89,8 @@ def nicht_auf_profil(metriken, profil):
         return 0
     if not videos:
         return 0
+    if len(videos) < int(((profil or {}).get("konto") or {}).get("videoCount") or 0):
+        return 0   # nicht alle Profil-Videos gesehen (Embed zeigt nur die neuesten 10, PC war länger aus): nichts aussortieren
     n = 0
     for e in metriken.values():
         m = e.get("meta") or {}

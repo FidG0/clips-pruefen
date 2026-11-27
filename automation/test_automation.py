@@ -186,6 +186,20 @@ class TikTokProfil(unittest.TestCase):
         zeilen, _ = zahlen.gruppieren(m)
         self.assertNotIn("weg", [z["id"] for z in zeilen])
 
+    def test_spaete_zuordnung_ohne_doppel(self):
+        m = {"tt:771": {"meta": {"plattform": "tiktok"}, "verlauf": {"1": {"views": 10}}}}
+        zahlen.profil_einmischen(m, self.profil(1808))
+        self.assertNotIn("tt:771", m)
+        self.assertEqual(m["b1"]["verlauf"]["1"]["views"], 1808)
+
+    def test_nicht_auf_profil_nur_wenn_alle_videos_gesehen(self):
+        p = self.profil(1808)
+        p.update(stand="2026-11-27T16:00:00+00:00", konto={"videoCount": 15})
+        m = {"weg": {"meta": {"plattform": "tiktok", "gesendet": "2026-11-25T18:00:00+00:00"}, "verlauf": {"1": {"views": 0}}}}
+        zahlen.profil_einmischen(m, p)
+        self.assertEqual(m["weg"]["verlauf"]["1"]["views"], 0)
+        self.assertNotIn("nicht_auf_profil", m["weg"]["meta"])
+
     def test_ohne_profil_aendert_nichts(self):
         m = {"b1": {"meta": {}, "verlauf": {"1": {"views": 5}}}}
         self.assertEqual(zahlen.profil_einmischen(m, {}), 0)
