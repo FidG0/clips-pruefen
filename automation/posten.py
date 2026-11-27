@@ -117,10 +117,11 @@ def texte_korrigieren(sb, zustand, buf, org_id, kanaele, ist_live, trends, jetzt
         pf = g.get("plattform", "tiktok")
         teile, sperre = texte_fuer(a, k, pf, trends)
         neu, meta = texte_text(teile, pf), metadata_bauen(k, pf, teile=teile)
-        if neu == g.get("text") and not alter_text(g):
-            continue   # schon im aktuellen Format
-        if not alter_text(g) and texte_gleich_ohne_tags(neu, g.get("text")):
-            continue   # 27.11.: nur Trend-Hashtags gewandert (wechseln je Lauf), kein Vorlagen-Verstoß, nichts anfassen
+        if not alter_text(g):
+            # 27.11. abends: nur echtes Altformat (Titel:/Beschreibung:-Block, „YouTube Shorts:“) wird korrigiert.
+            # Andere Texte gehören zur bestätigten Fassung (oft von Marvin bearbeitet, z. B. englisch bei englischem Clip)
+            # und bleiben, wie sie sind (Marvin 19:47: nach dem Bestätigen wird nichts mehr verändert).
+            continue
         zeile = {"buffer_id": g.get("buffer_id") or g.get("youtube_id"), "plattform": pf, "slot_lokal": g.get("slot_lokal"), "titel": teile.get("titel"),
                  "alt": g.get("text"), "neu": neu, "meta": meta}
         if g.get("buffer_id") and g["buffer_id"] in gesendet:
