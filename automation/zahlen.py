@@ -72,6 +72,34 @@ def profil_einmischen(metriken, profil):
             verlauf[tag] = {**rest, **{k: w.get(k) for k in PROFIL_FELDER}, "abgerufen": w.get("abgerufen"), "quelle": "tiktok_profil"}
         e["verlauf"] = verlauf
         n += 1
+    nicht_auf_profil(metriken, profil)
+    return n
+
+
+def nicht_auf_profil(metriken, profil):
+    """27.11.: TikTok-Posts, die Buffer als gesendet meldet, die aber 24 h nach dem Senden nicht auf dem öffentlichen
+    Profil stehen (gelöscht, nie erschienen, z. B. Zarbex Rollator und xQc vom 25.11.), zählen nicht mit. Ihre Buffer-Nullen
+    zogen sonst den TikTok-Median und die Regelwerk-Gewichte nach unten. Meta bleibt, nur die Tageswerte fliegen raus."""
+    videos = (profil or {}).get("videos") or {}
+    try:
+        stand = dt.datetime.fromisoformat(profil["stand"])
+    except (KeyError, TypeError, ValueError):
+        return 0
+    if not videos:
+        return 0
+    n = 0
+    for e in metriken.values():
+        m = e.get("meta") or {}
+        if (m.get("plattform") or "tiktok") != "tiktok" or m.get("tiktok_id") or not m.get("gesendet"):
+            continue
+        try:
+            gesendet = dt.datetime.fromisoformat(m["gesendet"].replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if stand - gesendet > dt.timedelta(hours=24):
+            m["nicht_auf_profil"] = True
+            e["verlauf"] = {}
+            n += 1
     return n
 
 
