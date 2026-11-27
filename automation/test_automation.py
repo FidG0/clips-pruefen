@@ -1086,13 +1086,13 @@ class TexteImJob(unittest.TestCase):
         sb = Sb({})
         posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, True, None, jetzt)
         self.assertEqual(Buf.bearbeitet, [])                       # ohne Freigabe nichts
-        self.assertEqual(len(sb.geschrieben["texte_korrektur"]["vorschau"]), 3)   # 26.11.: alles, was nicht Marvins Vorlage entspricht
+        self.assertEqual(len(sb.geschrieben["texte_korrektur"]["vorschau"]), 2)   # 27.11. abends: nur echtes Altformat, „sauber“ bleibt
         sb = Sb({"freigabe": True})
         posten.texte_korrigieren(sb, z, Buf(), "org", {"tiktok": {"id": "c"}}, True, None, jetzt)
-        self.assertEqual([i for i, _ in Buf.bearbeitet], ["b1", "b3"])     # b2 ist schon gesendet
+        self.assertEqual([i for i, _ in Buf.bearbeitet], ["b1"])     # b2 ist schon gesendet, b3 gehört zur bestätigten Fassung
         self.assertNotIn("Titel:", Buf.bearbeitet[0][1])
         erg = {e["buffer_id"]: e["status"] for e in sb.geschrieben["texte_korrektur"]["ergebnis"]}
-        self.assertEqual(erg, {"b1": "korrigiert", "b2": "schon veröffentlicht, nicht angefasst", "b3": "korrigiert"})
+        self.assertEqual(erg, {"b1": "korrigiert", "b2": "schon veröffentlicht, nicht angefasst"})
         self.assertFalse(sb.geschrieben["texte_korrektur"]["freigabe"])
         self.assertEqual(z["geplant"][1]["status"], "gesendet")
         Buf.bearbeitet = []
