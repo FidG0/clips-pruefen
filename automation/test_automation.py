@@ -127,6 +127,56 @@ class Analyse(unittest.TestCase):
         self.assertEqual(m["p0"]["verlauf"], {})
 
 
+class TikTokProfil(unittest.TestCase):
+    """27.11.: Buffer meldet für TikTok 0 Aufrufe, das öffentliche Profil die echten Zahlen. Profil gewinnt immer."""
+    jetzt = dt.datetime(2026, 11, 27, 16, 0, tzinfo=UTC)
+
+    def buffer_post(self, views):
+        due = (self.jetzt - dt.timedelta(hours=16)).isoformat()   # Tag 1
+        return [{"id": "b1", "text": "t", "dueAt": due, "channelId": "tt",
+                 "metrics": [{"type": "views", "value": views}, {"type": "totalTimeWatched", "value": 50}]}]
+
+    def profil(self, views):
+        return {"videos": {"771": {"id": "771", "post_key": "b1", "create_time": "2026-11-26T23:33:27+00:00",
+                                   "link": "https://www.tiktok.com/@clipwreckofc/video/771",
+                                   "verlauf": {"1": {"views": views, "likes": 205, "comments": 0, "shares": 1, "saves": 5}}}}}
+
+    def test_profil_schlaegt_buffer_null(self):
+        geplant = [{"buffer_id": "b1", "status": "gesendet", "plattform": "tiktok", "titel": "Monte vier Zehen"}]
+        m = zahlen.metriken_aktualisieren({}, self.buffer_post(0), geplant, self.jetzt, {"tt": "tiktok"})
+        self.assertEqual(m["b1"]["verlauf"]["1"]["views"], 0)
+        zahlen.profil_einmischen(m, self.profil(1808))
+        self.assertEqual(m["b1"]["verlauf"]["1"]["views"], 1808)
+        self.assertEqual(m["b1"]["verlauf"]["1"]["totalTimeWatched"], 50)   # Buffer-Extras ohne Profil-Gegenstück bleiben
+        self.assertEqual(m["b1"]["meta"]["tiktok_id"], "771")
+        self.assertEqual(zahlen.kennzahlen(m["b1"])["views_d3"], 1808)
+        # nächster Buffer-Lauf meldet wieder 0: nach dem Einmischen bleibt es bei 1808
+        m = zahlen.metriken_aktualisieren(m, self.buffer_post(0), geplant, self.jetzt, {"tt": "tiktok"})
+        zahlen.profil_einmischen(m, self.profil(1808))
+        self.assertEqual(m["b1"]["verlauf"]["1"]["views"], 1808)
+
+    def test_buffer_nullen_an_tagen_ohne_profilwert_fliegen_raus(self):
+        m = {"b1": {"meta": {"plattform": "tiktok"}, "verlauf": {"1": {"views": 0}, "2": {"views": 0}}}}
+        p = self.profil(900)
+        p["videos"]["771"]["verlauf"] = {"4": {"views": 900}}
+        zahlen.profil_einmischen(m, p)
+        self.assertEqual(sorted(m["b1"]["verlauf"]), ["4"])
+        self.assertEqual(zahlen.kennzahlen(m["b1"])["views_d3"], 900)
+
+    def test_nur_auf_profil_gibt_eigenen_eintrag(self):
+        p = self.profil(61)
+        p["videos"]["771"].update(post_key=None, desc="@papaplatte versagt")
+        m = {}
+        zahlen.profil_einmischen(m, p)
+        self.assertEqual(m["tt:771"]["meta"]["plattform"], "tiktok")
+        self.assertEqual(m["tt:771"]["verlauf"]["1"]["views"], 61)
+
+    def test_ohne_profil_aendert_nichts(self):
+        m = {"b1": {"meta": {}, "verlauf": {"1": {"views": 5}}}}
+        self.assertEqual(zahlen.profil_einmischen(m, {}), 0)
+        self.assertEqual(m["b1"]["verlauf"]["1"]["views"], 5)
+
+
 class Csv(unittest.TestCase):
     def test_import_deutsch(self):
         with tempfile.TemporaryDirectory() as d:

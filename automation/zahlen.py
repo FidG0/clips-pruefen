@@ -3,6 +3,8 @@
 Quellen:
   1) Buffer-API (Post.metrics, täglich aktualisiert): Views, Likes, Kommentare, Shares, Follows, totalTimeWatched
   2) CSV-Fallback (csv_import.py auf dem PC, TikTok-Studio-Export) für Haltezeit/Wiedergabe-Quote
+  3) 27.11.: TikTok-Profil (info.tiktok_profil, schreibt cloud/tiktok_zahlen.py am PC): ersetzt Buffers TikTok-Zahlen,
+     weil Buffer für TikTok fast immer 0 Aufrufe meldet
 
 Ergebnis in Supabase info:
   metriken     Rohdaten je Post, Tag 1..10
@@ -41,6 +43,36 @@ def metriken_aktualisieren(metriken, posts, geplant, jetzt, plattform_von_kanal=
         werte = {m["type"]: m["value"] for m in p["metrics"]}
         eintrag["verlauf"][str(tag)] = {**werte, "abgerufen": jetzt.isoformat()}
     return metriken
+
+
+PROFIL_FELDER = ("views", "likes", "comments", "shares", "saves")
+
+
+def profil_einmischen(metriken, profil):
+    """27.11.: TikTok-Zahlen vom öffentlichen Profil (cloud/tiktok_zahlen.py am PC, info.tiktok_profil) ersetzen Buffers
+    TikTok-Werte. Buffer meldet für TikTok fast immer 0 Aufrufe: das heißt „falsch“, nicht „keine Aufrufe“. Deshalb
+    fliegen Buffers Tageswerte bei jedem Post mit Profil-Treffer raus, auch an Tagen ohne Profilwert (sonst bliebe
+    views_d3 bei 0). Läuft nach metriken_aktualisieren, damit ein späterer Buffer-Lauf die Profilzahlen nie überschreibt."""
+    n = 0
+    for vid, v in ((profil or {}).get("videos") or {}).items():
+        if not v.get("verlauf"):
+            continue
+        schluessel = v.get("post_key") or "tt:" + vid
+        e = metriken.setdefault(schluessel, {"meta": {}, "verlauf": {}})
+        if not v.get("post_key"):   # nur auf dem Profil gefunden, kein Buffer-Post dazu
+            e["meta"] = {"titel": (v.get("desc") or "")[:80], "manuell": True, **e["meta"]}
+        e["meta"].update(plattform="tiktok", tiktok_id=vid, link=v.get("link"))
+        e["meta"].setdefault("gesendet", v.get("create_time"))
+        alt = e.get("verlauf") or {}
+        verlauf = {}
+        for tag, w in v["verlauf"].items():
+            if int(tag) > CONFIG["tracking_tage"]:
+                continue
+            rest = {k: x for k, x in (alt.get(tag) or {}).items() if k not in PROFIL_FELDER and k != "impressions"}
+            verlauf[tag] = {**rest, **{k: w.get(k) for k in PROFIL_FELDER}, "abgerufen": w.get("abgerufen"), "quelle": "tiktok_profil"}
+        e["verlauf"] = verlauf
+        n += 1
+    return n
 
 
 def youtube_aktualisieren(metriken, yt, geplant, jetzt):
@@ -222,6 +254,8 @@ def main():
             print(f"YouTube Analytics: {n} direkte Shorts abgefragt.")
         except Exception as e:  # Zahlen sind Hilfe, kein Muss
             print(f"YouTube Analytics übersprungen: {str(e)[:200]}")
+    n = profil_einmischen(metriken, sb.info_lesen("tiktok_profil", {}))   # 27.11.: nach Buffer, damit Buffer-Nullen nie gewinnen
+    print(f"TikTok-Profil: {n} Posts mit echten Zahlen vom öffentlichen Profil.")
     sb.info_schreiben("metriken", metriken)
     if posting:
         sb.info_schreiben("posting", posting)
