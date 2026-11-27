@@ -2,7 +2,8 @@
 
 Läuft alle 15 Min in GitHub Actions. Slots aus config.json (13:00/16:00/19:00/20:30 plus Bonus 22:00, Berlin),
 je Plattform max. 5 pro Tag. Den Bonus-Slot gibt es nur auf ausdrücklichen Wunsch, „nächster Slot“ nimmt ihn nie.
-Buffer Free: max. 10 geplante Posts je Kanal, darüber bleibt die Freigabe offen.
+Buffer Free: max. 10 geplante Posts je Kanal. Seit 27.11. bekommt jede Freigabe sofort ihren Slot (Kalender voll),
+liegt aber im eigenen Vorrat (vorrat=True) und wird erst nachgeschoben, wenn bei Buffer Platz ist (Rolling Window).
 Ohne BUFFER_LIVE=ja nur Probelauf: info.posting.probelauf zeigt, was geplant würde, nichts geht an Buffer.
 
 Freigabe = Auftrag mit aktion 'behalten' und Kommentar, der mit '[posten]' beginnt
@@ -14,7 +15,7 @@ import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 
-from lib import (CONFIG, Buffer, Supabase, YouTube, buffer_voll, clip_wert, regeln, strike_sperre, ist_bonus, sofort_slot, sofort_warnungen, format_von, live, metadata_bauen,
+from lib import (CONFIG, Buffer, Supabase, YouTube, buffer_frei, vorrat_nachschieben, clip_wert, regeln, strike_sperre, ist_bonus, sofort_slot, sofort_warnungen, format_von, live, metadata_bauen,
                  naechster_slot, slot_pruefen, sperrgrund, texte_aus_kommentar, texte_bauen, texte_pruefen, texte_text, titel_typ,
                  wunsch_slots, RAUSNEHMEN, RUECKZUG, rueckzug_art, rueckzug_plattformen)
 
@@ -436,7 +437,9 @@ def main():
     korrektur = (sb.info_lesen("texte_korrektur", {}) or {}).get("freigabe")
     stopp_offen = bool((sb.info_lesen("strikes", {}) or {}).get("liste")) or any((g.get("status") == "geplant" or g.get("loeschen_offen")) and (g.get("auftrag_id") or 0) <= int((sb.info_lesen("posten_stopp", {}) or {}).get("bis_auftrag") or 0)
                       for g in zustand["geplant"])
-    if ist_live and (offen or rueck or alter > 3600 or korrektur or stopp_offen):
+    # 27.11.: Vorrat mit freiem Platz bei Buffer braucht auch einen Buffer-Zugang (Nachschieben)
+    vorrat_wartet = any(g.get("vorrat") and g.get("status") == "geplant" for g in zustand["geplant"])
+    if ist_live and (offen or rueck or alter > 3600 or korrektur or stopp_offen or vorrat_wartet):
         try:
             buf = Buffer()
             org_id, kanaele = buf.kanaele(CONFIG["buffer_kanal_name"])
@@ -496,6 +499,9 @@ def main():
             e.update(status="fehler", fehler=str(fehler)[:300])
         return e
 
+    def ueber_buffer(p):
+        return not (p == "youtube" and r["youtube_weg"] == "direkt")
+
     belegt = {p: belegte_slots(zustand["geplant"], p) for p in plattformen}
     probe, gesperrt = [], []
     for a in offen:
@@ -537,11 +543,7 @@ def main():
             gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"), "grund": "Text " + sperre_text})
             print(f"gesperrt  {k.get('titel')}: Text {sperre_text}")
             continue
-        voll = [g for g in (buffer_voll(zustand["geplant"], p) for p in ziel) if g]
-        if voll:   # Buffer Free: max. 10 geplante je Kanal. Freigabe bleibt offen, nächster Lauf versucht es wieder.
-            gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"), "grund": voll[0]})
-            print(f"wartet   {k.get('titel')}: {voll[0]}")
-            continue
+        # 27.11.: keine Sperre mehr bei „Buffer voll“. Der Post bekommt seinen Slot und wartet im Vorrat (siehe unten).
         slots, hinweise = {}, {}
         # 25.11. (Marvin, Idee 5): TikTok zuerst. Reels versetzt, YouTube wartet auf die Tages-Auswahl der besten.
         reihe = sorted(ziel, key=lambda p: {"tiktok": 0}.get(p, 1))
@@ -579,7 +581,12 @@ def main():
                 e["bonus"] = True
             if hinweise.get(p):
                 e["hinweis"] = hinweise[p]
-            senden(e, p, slot, text, meta, teile, bucket, pfad, link_cache)
+            if wunsch.get(p) == "sofort" or not ueber_buffer(p):
+                senden(e, p, slot, text, meta, teile, bucket, pfad, link_cache)
+            elif not pfad:
+                e.update(status="fehler", fehler="Keine Videodatei in Supabase (datei/vorschau fehlt).")
+            else:   # 27.11. Rolling Window: erst in den Vorrat, nachgeschoben wird nach Slot-Reihenfolge
+                e.update(vorrat=True, bucket=bucket, pfad=pfad)
             if ist_live:
                 zustand["geplant"].append(e)
             else:
@@ -603,6 +610,27 @@ def main():
             print(f"youtube   wartet    ab {ab_yt.astimezone(ZoneInfo(CONFIG['zeitzone'])).strftime('%a %d.%m. %H:%M')}  {w['titel']}  (Wert {w['wert']:.0f})")
         if ist_live:
             zustand["erledigte_auftraege"].append(a["id"])
+
+    # 27.11. Rolling Window: Vorrat in Slot-Reihenfolge zu Buffer schieben, bis je Kanal wieder 10 geplant sind
+    vorrat_log = []
+    if ist_live and buf is not None and kanaele:
+        for p in plattformen:
+            if not ueber_buffer(p):
+                continue
+            def senden_vorrat(g, p=p):
+                slot = dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00"))
+                return senden(g, p, slot, g.get("text"), g.get("metadata"), g.get("teile") or {}, g.get("bucket"), g.get("pfad"), {})
+            try:
+                vorrat_log += vorrat_nachschieben(zustand["geplant"], p, senden_vorrat, jetzt)
+            except Exception as fehler:   # Nachschieben darf den Rest nie blockieren
+                vorrat_log.append(f"Nachschieben {p} nicht gelaufen: {str(fehler)[:200]}")
+    for zeile in vorrat_log:
+        print(zeile)
+    zustand["vorrat"] = {p: {"im_vorrat": sum(1 for g in zustand["geplant"] if g.get("vorrat") and g.get("status") == "geplant"
+                                              and g.get("plattform", "tiktok") == p),
+                             "buffer_frei": buffer_frei(zustand["geplant"], p, jetzt)}
+                         for p in plattformen if ueber_buffer(p)}
+    zustand["vorrat_log"] = (list(zustand.get("vorrat_log") or []) + [jetzt.isoformat()[:16] + " " + z for z in vorrat_log])[-60:]
 
     def senden_warte(w, slot):
         auftrag = {"id": w["auftrag_id"], "karte_id": w["karte_id"], "titel": w.get("titel"), "karten": w.get("karte") or {}}
