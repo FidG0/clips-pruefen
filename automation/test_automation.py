@@ -1120,6 +1120,50 @@ class YouTubeDirekt(unittest.TestCase):
         self.assertEqual(aufrufe[2][0], "PUT")
 
 
+class YouTubeNieDoppelt(unittest.TestCase):
+    """27.11.: Asteroiden und Papaplatte Quiz lagen auf YouTube doppelt (direkt und über Buffer). Ein Video je Clip."""
+
+    def test_youtube_schon(self):
+        import posten
+        g = [{"karte_id": "k", "plattform": "youtube", "status": "gesendet", "weg": "direkt", "youtube_id": "v", "slot_lokal": "Fr 19:00"},
+             {"karte_id": "k2", "plattform": "youtube", "status": "geloescht", "buffer_id": "b"},
+             {"karte_id": "k3", "plattform": "tiktok", "status": "geplant", "buffer_id": "b3"}]
+        self.assertIn("direkt", posten.youtube_schon("k", g))
+        self.assertIsNone(posten.youtube_schon("k2", g))   # gelöscht zählt nicht
+        self.assertIsNone(posten.youtube_schon("k3", g))   # nur TikTok
+        fremd = [{"fremd": True, "plattform": "youtube", "status": "geplant", "text": "Papaplatte verliert das Quiz komplett",
+                  "slot_lokal": "Sa 13:00"}]
+        self.assertIn("von Hand", posten.youtube_schon("k4", [], fremd, {"titel": "Papaplatte verliert das Quiz"}))
+
+    def _warte(self, karte_id, wert=50):
+        jetzt = dt.datetime.now(UTC)
+        return {"auftrag_id": 1, "karte_id": karte_id, "titel": "T " + karte_id, "teile": {"titel": "T"}, "wert": wert,
+                "ab_utc": jetzt.isoformat(), "erstellt": jetzt.isoformat(), "pfad": "x.mp4", "bucket": "v", "karte": {}}
+
+    def test_warteschlange_laesst_schon_hochgeladene_fallen(self):
+        import posten
+        jetzt = dt.datetime.now(UTC)
+        z = {"geplant": [{"karte_id": "a", "plattform": "youtube", "status": "geplant", "buffer_id": "b1",
+                          "slot_utc": (jetzt + dt.timedelta(days=2)).isoformat()}],
+             "youtube_warte": [self._warte("a", 90), self._warte("b", 80), self._warte("b", 70)]}
+        r = {"youtube_warte_tage": 3, "youtube_pro_tag": 4, "youtube_entscheid_stunden": 48}
+        gesendet = []
+
+        def senden(w, slot):
+            gesendet.append(w["karte_id"])
+            return {"karte_id": w["karte_id"], "plattform": "youtube", "status": "geplant", "weg": "direkt",
+                    "slot_utc": slot.isoformat(), "slot_lokal": "x", "titel": w["titel"]}
+        posten.youtube_warte_planen(z, r, jetzt, senden, True, [])
+        self.assertEqual(gesendet, ["b"])                      # a liegt schon über Buffer, b nur einmal
+        self.assertEqual(z["youtube_warte"], [])
+
+    def test_neue_freigabe_nach_gesendet_kein_zweites_youtube(self):
+        r = WunschSlots()._lauf("[posten]", geplant=[{"karte_id": "k9", "plattform": "youtube", "status": "gesendet", "weg": "direkt",
+                                                      "youtube_id": "v1", "slot_utc": "2026-11-20T12:00:00+00:00"}])
+        self.assertNotIn("youtube", [e["plattform"] for e in r])
+        self.assertEqual(WunschSlots.letzter_zustand.get("youtube_warte_probe") or [], [])
+
+
 class YouTubeZahlen(unittest.TestCase):
     def test_analytics_in_metriken(self):
         import zahlen
