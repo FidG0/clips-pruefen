@@ -168,11 +168,45 @@ def laengen_bucket(dauer):
     return "ausserhalb"
 
 
+def youtube_doppel_markieren(metriken, fenster_s=300):
+    """27.11.: Buffer übernimmt direkt hochgeladene Shorts des verbundenen YouTube-Kanals 0 bis 3 Min später als
+    „manuell“ gesendeten Post (z. B. Asteroiden: yt:3JTXuTXVS5U und Buffer 6b0954e0…). Das ist dasselbe Video, kein
+    zweites. Solche Buffer-Einträge bekommen meta.doppel_von und zählen in der Auswertung nicht. Nichts wird gelöscht."""
+    direkt = []
+    for k, e in metriken.items():
+        if k.startswith("yt:"):
+            t = _zeit((e.get("meta") or {}).get("gesendet"))
+            if t:
+                direkt.append((k, t))
+    n = 0
+    for k, e in metriken.items():
+        m = e.get("meta") or {}
+        if k.startswith(("yt:", "tt:")) or m.get("plattform") != "youtube" or not m.get("manuell"):
+            continue
+        t = _zeit(m.get("gesendet"))
+        treffer = sorted((abs((t - z).total_seconds()), yk) for yk, z in direkt if t and abs((t - z).total_seconds()) <= fenster_s)
+        if treffer:
+            m["doppel_von"] = treffer[0][1]
+            n += 1
+        else:
+            m.pop("doppel_von", None)
+    return n
+
+
+def _zeit(iso):
+    try:
+        return dt.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def gruppieren(metriken):
     """Views werden je Plattform normiert (score = Views / Median der Plattform), damit YouTube, TikTok und
     Instagram fair vergleichbar sind. Gewichte im Regelwerk beruhen auf dem Score."""
     zeilen = []
     for pid, e in metriken.items():
+        if (e.get("meta") or {}).get("doppel_von"):   # 27.11.: Buffer-Spiegel eines direkten YouTube-Uploads
+            continue
         k = kennzahlen(e)
         if k:
             m = e.get("meta", {})
@@ -286,6 +320,8 @@ def main():
             print(f"YouTube Analytics: {n} direkte Shorts abgefragt.")
         except Exception as e:  # Zahlen sind Hilfe, kein Muss
             print(f"YouTube Analytics übersprungen: {str(e)[:200]}")
+    d = youtube_doppel_markieren(metriken)
+    print(f"YouTube: {d} Buffer-Einträge sind Spiegel direkter Uploads und zählen nicht doppelt.")
     n = profil_einmischen(metriken, sb.info_lesen("tiktok_profil", {}))   # 27.11.: nach Buffer, damit Buffer-Nullen nie gewinnen
     print(f"TikTok-Profil: {n} Posts mit echten Zahlen vom öffentlichen Profil.")
     sb.info_schreiben("metriken", metriken)
