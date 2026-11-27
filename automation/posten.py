@@ -279,6 +279,42 @@ def rueckzuege_anwenden(rueck, zustand, buf, ist_live, yt=None):
     return fertig, sperren
 
 
+def pause_zurueckholen(sb, zustand, buf, ist_live, jetzt):
+    """27.11. (0-Aufrufe-Alarm): während der TikTok-Pause dürfen auch die schon bei Buffer geplanten Posts nicht raus.
+    Unsere eigenen werden in Buffer gelöscht und warten im Vorrat (nach der Pause plant vorrat_nachschieben sie neu).
+    Von Hand geplante Posts stehen nicht in zustand["geplant"] und werden nie angefasst. Ohne Videodatei oder wenn das
+    Löschen scheitert, bleibt der Post bei Buffer und bekommt einen Hinweis. Gibt (zurückgeholt, noch bei Buffer) zurück."""
+    geholt = bleibt = 0
+    for g in zustand["geplant"]:
+        if (g.get("plattform", "tiktok") != "tiktok" or g.get("status") != "geplant" or not g.get("buffer_id")
+                or g.get("weg") == "direkt"):
+            continue
+        slot = dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00"))
+        if slot <= jetzt:
+            continue
+        try:
+            if not ist_live or buf is None:
+                raise RuntimeError("Buffer nicht erreichbar")
+            if slot <= jetzt + dt.timedelta(minutes=3):
+                raise RuntimeError("zu knapp vor dem Senden")
+            if not g.get("pfad"):
+                q = urllib.parse.urlencode({"select": "*", "id": "eq." + str(g.get("karte_id"))})
+                g["bucket"], g["pfad"] = videodatei((sb.holen("karten", q) or [{}])[0])
+            if not g.get("pfad"):
+                raise RuntimeError("keine Videodatei zum späteren Neuplanen")
+            buf.post_loeschen(g["buffer_id"])
+        except Exception as fehler:
+            bleibt += 1
+            g["hinweis"] = f"TikTok-Pause: bleibt bei Buffer geplant ({str(fehler)[:160]}). Zur Not in Buffer von Hand löschen."
+            print(f"pause     bleibt     {g.get('slot_lokal')}  {g.get('titel')}: {fehler}")
+            continue
+        g.setdefault("buffer_ids_alt", []).append(g["buffer_id"])
+        g.update(buffer_id=None, vorrat=True, versuche=0, hinweis="TikTok-Pause (0 Aufrufe): aus Buffer zurückgeholt, wartet.")
+        geholt += 1
+        print(f"pause     zurück     {g.get('slot_lokal')}  {g.get('titel')}")
+    return geholt, bleibt
+
+
 def gesperrte_plattformen(auftrag, sperren):
     """None = Freigabe gilt normal. Menge = diese Plattformen entfallen. 'alle' = Freigabe verfällt ganz."""
     weg = set()
@@ -440,7 +476,11 @@ def main():
                       for g in zustand["geplant"])
     # 27.11.: Vorrat mit freiem Platz bei Buffer braucht auch einen Buffer-Zugang (Nachschieben)
     vorrat_wartet = any(g.get("vorrat") and g.get("status") == "geplant" for g in zustand["geplant"])
-    if ist_live and (offen or rueck or alter > 3600 or korrektur or stopp_offen or vorrat_wartet):
+    # 27.11.: 0-Aufrufe-Alarm (cloud/tiktok_wache.py am PC setzt die Pause, Fortsetzen in der Zentrale)
+    pause = {p for p, x in (sb.info_lesen("posten_pause", {}) or {}).items() if p == "tiktok" and (x or {}).get("aktiv")}
+    pause_offen = any(g.get("buffer_id") and g.get("status") == "geplant" and g.get("plattform", "tiktok") in pause
+                      for g in zustand["geplant"])
+    if ist_live and (offen or rueck or alter > 3600 or korrektur or stopp_offen or vorrat_wartet or pause_offen):
         try:
             buf = Buffer()
             org_id, kanaele = buf.kanaele(CONFIG["buffer_kanal_name"])
@@ -484,6 +524,10 @@ def main():
     zustand["youtube_warte"] = [w for w in zustand.get("youtube_warte", [])
                                 if gesperrte_plattformen({"id": w.get("auftrag_id") or 0, "karte_id": w.get("karte_id")}, rueck_sperren) is None]
     strikes_raeumen(zustand, strikes, buf, yt, ist_live)
+    zustand["pause"] = {}
+    if pause:
+        geholt, bleibt = pause_zurueckholen(sb, zustand, buf, ist_live, jetzt)
+        zustand["pause"] = {"tiktok": {"zurueckgeholt": geholt, "in_buffer": bleibt}}
     for g in zustand["geplant"]:   # direkte YouTube-Uploads: nach der Veröffentlichungszeit gelten sie als gesendet
         if g.get("weg") == "direkt" and g.get("status") == "geplant" and dt.datetime.fromisoformat(g["slot_utc"]) <= jetzt:
             g["status"] = "gesendet"
@@ -600,7 +644,9 @@ def main():
                 e["bonus"] = True
             if hinweise.get(p):
                 e["hinweis"] = hinweise[p]
-            if wunsch.get(p) == "sofort" or not ueber_buffer(p):
+            if p in pause:   # 27.11.: Pause, auch „sofort“ wartet
+                e.update(vorrat=True, bucket=bucket, pfad=pfad, hinweis="TikTok-Pause (0 Aufrufe): wartet, bis du fortsetzt.")
+            elif wunsch.get(p) == "sofort" or not ueber_buffer(p):
                 senden(e, p, slot, text, meta, teile, bucket, pfad, link_cache)
             elif not pfad:
                 e.update(status="fehler", fehler="Keine Videodatei in Supabase (datei/vorschau fehlt).")
@@ -634,7 +680,7 @@ def main():
     vorrat_log = []
     if ist_live and buf is not None and kanaele:
         for p in plattformen:
-            if not ueber_buffer(p):
+            if not ueber_buffer(p) or p in pause:
                 continue
             def senden_vorrat(g, p=p):
                 slot = dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00"))

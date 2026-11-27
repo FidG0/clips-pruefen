@@ -795,6 +795,124 @@ class VonHand(unittest.TestCase):
         self.assertTrue(any(g.get("karte_id") == "neu2" and g["plattform"] == "instagram" for g in z["geplant"]))
 
 
+class TikTokPause(unittest.TestCase):
+    """27.11. (0-Aufrufe-Alarm): info.posten_pause.tiktok.aktiv hält TikTok an. Nichts Neues zu Buffer, eigene geplante
+    Posts zurück in den Vorrat, Hand-Posts bleiben, andere Plattformen laufen weiter. Nach der Pause geht es weiter."""
+
+    def _lauf(self, geplant, pause, kommentar="[posten]", freigabe=True, loeschen_geht=True):
+        import os
+        import posten
+        jetzt = dt.datetime.now(UTC)
+
+        class FakeSb:
+            gespeichert = {}
+
+            def info_lesen(self, k, d=None):
+                if k == "posten_regeln":
+                    return {"youtube_entscheid_stunden": 0}
+                if k == "posting":
+                    return {"geplant": [dict(g) for g in geplant], "buffer": {"geprueft": jetzt.isoformat()}}
+                if k == "posten_pause":
+                    return {"tiktok": {"aktiv": pause}}
+                return {}
+
+            def info_schreiben(self, k, w):
+                FakeSb.gespeichert[k] = w
+
+            def holen(self, t, q):
+                import urllib.parse
+                q = urllib.parse.unquote(q)
+                if t == "karten":
+                    return [{"id": "alt1", "datei": "alt1.mp4"}] if "alt1" in q else []
+                if t != "auftraege" or "posten" not in q or not freigabe:
+                    return []
+                return [{"id": 20, "karte_id": "neu1", "kommentar": kommentar, "titel": None,
+                         "karten": {"titel": "NPC fährt gegen Laterne", "kanal": "Zarbex", "datei": "a.mp4",
+                                    "checks": {"ton_sync": {"status": "gruen"}}}}]
+
+            def signierter_link(self, b, p, s):
+                return "https://x/" + p
+
+        class FakeBuf:
+            geplant, geloescht = [], []
+
+            def kanaele(self, name):
+                return "org", {p: {"id": p} for p in ("tiktok", "instagram", "youtube")}
+
+            def post_ids(self, org, ids, status, max_seiten=1):
+                return {g["buffer_id"] for g in geplant if g.get("buffer_id")} - set(self.geloescht) if "scheduled" in status else set()
+
+            def offene_posts(self, org, ids, max_seiten=4):
+                return []
+
+            def post_planen(self, kanal, text, link, slot, meta):
+                self.geplant.append(kanal)
+                return {"id": f"neu{len(self.geplant)}{kanal}"}
+
+            def post_loeschen(self, i):
+                if not loeschen_geht:
+                    raise RuntimeError("HTTP 500")
+                self.geloescht.append(i)
+
+        alt = (posten.Supabase, posten.Buffer, posten.live)
+        posten.Supabase, posten.Buffer, posten.live = FakeSb, FakeBuf, (lambda: True)
+        os.environ.pop("BUFFER_LIVE", None)
+        try:
+            posten.main()
+        finally:
+            posten.Supabase, posten.Buffer, posten.live = alt
+        return FakeSb.gespeichert["posting"], FakeBuf
+
+    def _g(self, stunden, **x):
+        jetzt = dt.datetime.now(UTC)
+        return {"auftrag_id": 1, "karte_id": "alt1", "plattform": "tiktok", "status": "geplant", "titel": "Alt", "text": "t",
+                "slot_utc": (jetzt + dt.timedelta(hours=stunden)).isoformat(), "slot_lokal": f"+{stunden}h", **x}
+
+    def test_geplante_buffer_posts_kommen_zurueck_in_den_vorrat(self):
+        z, buf = self._lauf([self._g(5, buffer_id="b1")], pause=True, freigabe=False)
+        e = z["geplant"][0]
+        self.assertEqual(buf.geloescht, ["b1"])
+        self.assertEqual((e["status"], e["vorrat"], e["buffer_id"]), ("geplant", True, None))
+        self.assertEqual((e["bucket"], e["pfad"]), ("fertig", "alt1.mp4"))   # Datei gemerkt, sonst nicht neu planbar
+        self.assertEqual(e["buffer_ids_alt"], ["b1"])
+        self.assertNotIn("tiktok", buf.geplant)
+        self.assertEqual(z["pause"], {"tiktok": {"zurueckgeholt": 1, "in_buffer": 0}})
+
+    def test_andere_plattformen_bleiben(self):
+        z, buf = self._lauf([self._g(5, buffer_id="i1", plattform="instagram")], pause=True, freigabe=False)
+        self.assertEqual(buf.geloescht, [])
+        self.assertEqual(z["geplant"][0]["buffer_id"], "i1")
+
+    def test_ohne_videodatei_wird_nichts_geloescht(self):
+        z, buf = self._lauf([self._g(5, buffer_id="b1", karte_id="weg")], pause=True, freigabe=False)
+        self.assertEqual(buf.geloescht, [])
+        self.assertEqual(z["geplant"][0]["buffer_id"], "b1")
+        self.assertEqual(z["pause"]["tiktok"]["in_buffer"], 1)
+
+    def test_loeschen_geht_nicht_bleibt_in_buffer_sichtbar(self):
+        z, buf = self._lauf([self._g(5, buffer_id="b1")], pause=True, freigabe=False, loeschen_geht=False)
+        e = z["geplant"][0]
+        self.assertEqual(e["buffer_id"], "b1")
+        self.assertFalse(e.get("vorrat"))
+        self.assertIn("Pause", e["hinweis"])
+        self.assertEqual(z["pause"]["tiktok"]["in_buffer"], 1)
+
+    def test_neue_freigabe_und_sofort_warten(self):
+        z, buf = self._lauf([], pause=True, kommentar="[posten] slot:tiktok=sofort slot:instagram=sofort")
+        tt = [g for g in z["geplant"] if g["plattform"] == "tiktok"][0]
+        self.assertTrue(tt["vorrat"])
+        self.assertNotIn("tiktok", buf.geplant)
+        self.assertIn("instagram", buf.geplant)
+
+    def test_ohne_pause_geht_der_vorrat_wieder_raus(self):
+        z, buf = self._lauf([self._g(-3, vorrat=True, bucket="fertig", pfad="alt1.mp4", buffer_id=None)], pause=False, freigabe=False)
+        e = z["geplant"][0]
+        self.assertIn("tiktok", buf.geplant)
+        self.assertFalse(e.get("vorrat"))
+        self.assertGreater(dt.datetime.fromisoformat(e["slot_utc"]), dt.datetime.now(UTC))   # alter Slot: neuer freier
+        self.assertEqual(z["pause"], {})
+
+
 if __name__ == "__main__":
     unittest.main()
 
