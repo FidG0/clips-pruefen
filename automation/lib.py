@@ -171,6 +171,21 @@ class Buffer:
             nach = d["pageInfo"]["endCursor"]
         return ids
 
+    def offene_posts(self, org_id, kanal_ids, max_seiten=4):
+        """27.11.: alle noch nicht gesendeten Posts (auch die von Hand in Buffer geplanten) mit Text, Zeit und Kanal."""
+        q = """query($a: String) {
+                 posts(first: 50, after: $a, input: {organizationId: %s, filter: {status: [scheduled, sending, needs_approval, draft], channelIds: %s}}) {
+                   edges { node { id text dueAt channelId } } pageInfo { endCursor hasNextPage } } }""" % (
+            json.dumps(org_id), json.dumps(list(kanal_ids)))
+        posts, nach = [], None
+        for _ in range(max_seiten):
+            d = self.gql(q, {"a": nach})["posts"]
+            posts += [e["node"] for e in d["edges"]]
+            if not d["pageInfo"]["hasNextPage"]:
+                break
+            nach = d["pageInfo"]["endCursor"]
+        return posts
+
     def gesendete_posts(self, org_id, kanal_ids, max_seiten=10):
         q = """query($a: String) {
                  posts(first: 50, after: $a, input: {organizationId: %s, filter: {status: [sent], channelIds: %s}}) {
@@ -376,6 +391,116 @@ def vorrat_nachschieben(geplant, plattform, senden, jetzt_utc=None, cfg=CONFIG, 
         if g["versuche"] < max_versuche:   # nächster Lauf versucht es wieder, Slot bleibt
             g.update(status="geplant", vorrat_fehler=g.pop("fehler", None))
         protokoll.append(f"fehler {plattform} {g.get('slot_lokal')} Versuch {g['versuche']}: {g.get('fehler') or g.get('vorrat_fehler')}  {g.get('titel')}")
+    return protokoll
+
+
+# ---------------------------------------------------------------- Von Hand in Buffer (27.11.)
+# Marvin will weiter selbst Posts in den Buffer-Kalender legen. Die zählen mit (Buffer-Grenze 10 je Kanal, Posts pro Tag,
+# belegte Slots), werden aber nie angefasst: sie landen nur in zustand["buffer_fremd"], nie in zustand["geplant"].
+# Alles, was löscht oder bearbeitet, läuft nur über zustand["geplant"]. Hat Marvin einen unserer Posts in Buffer
+# verschoben, übernehmen wir die neue Zeit statt ihn zurückzusetzen.
+FREMD_FANG_MINUTEN = 45   # ein Hand-Post bis 45 Min neben einem Slot belegt diesen Slot
+
+
+def _utc(text):
+    try:
+        return dt.datetime.fromisoformat(str(text).replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _slot_fangen(t, cfg=CONFIG):
+    """Nächster Posting-Slot am selben Tag, wenn er höchstens FREMD_FANG_MINUTEN entfernt ist, sonst t selbst."""
+    tz = ZoneInfo(cfg["zeitzone"])
+    lokal = t.astimezone(tz)
+    beste = None
+    for s in cfg["slots"]:
+        h, m = map(int, s.split(":"))
+        k = lokal.replace(hour=h, minute=m, second=0, microsecond=0)
+        d = abs((k - lokal).total_seconds())
+        if d <= FREMD_FANG_MINUTEN * 60 and (beste is None or d < beste[0]):
+            beste = (d, k)
+    return (beste[1] if beste else lokal).astimezone(dt.timezone.utc)
+
+
+def fremde_posts(posts, geplant, kanal_plattform, cfg=CONFIG):
+    """Teilt Buffers offene Posts auf. Gibt (fremd, verschoben) zurück.
+
+    fremd: Einträge für Posts, die nicht von uns sind (Marvin von Hand), im Format von zustand["geplant"] mit fremd=True,
+    damit Zähler und Slot-Suche sie mitzählen. verschoben: unsere Einträge, deren Zeit Marvin in Buffer geändert hat
+    (die Einträge selbst werden angepasst)."""
+    tz = ZoneInfo(cfg["zeitzone"])
+    eigene = {g["buffer_id"]: g for g in geplant if g.get("buffer_id")}
+    fremd, verschoben = [], []
+    for p in posts:
+        plattform = kanal_plattform.get(p.get("channelId"))
+        if not plattform:
+            continue
+        t = _utc(p.get("dueAt"))
+        g = eigene.get(p.get("id"))
+        if g is not None:
+            alt = _utc(g.get("slot_utc"))
+            if t and g.get("status") == "geplant" and alt and abs((t - alt).total_seconds()) >= 60:
+                lokal = t.astimezone(tz)
+                g.update(slot_utc=t.isoformat(), slot=lokal.strftime("%H:%M"), slot_lokal=lokal.strftime("%a %d.%m. %H:%M"),
+                         hinweis=f"In Buffer von Hand verschoben auf {lokal.strftime('%a %d.%m. %H:%M')}.")
+                verschoben.append(g)
+            continue
+        e = {"fremd": True, "plattform": plattform, "buffer_id": p.get("id"), "titel": "Von Hand in Buffer",
+             "text": str(p.get("text") or "")[:400], "status": "geplant" if t else "entwurf"}
+        if t:
+            slot = _slot_fangen(t, cfg)
+            lokal = t.astimezone(tz)
+            e.update(slot_utc=slot.isoformat(), due_utc=t.isoformat(), slot_lokal=lokal.strftime("%a %d.%m. %H:%M"))
+        fremd.append(e)
+    return fremd, verschoben
+
+
+def _woerter(text):
+    return [w for w in re.findall(r"[a-zäöüß0-9]+", str(text or "").lower()) if not w.startswith("#")]
+
+
+def _hashfrei(text):
+    return re.sub(r"[#@]\S+", " ", str(text or ""))
+
+
+def fremd_doppelt(karte, fremd, plattform, titel=None):
+    """Der Hand-Post auf dieser Plattform, der denselben Clip zeigt (gleicher Titel oder fast gleicher Text), sonst None.
+
+    Bewusst streng (Titel mit mind. 3 Wörtern als zusammenhängende Wortfolge im Text), damit ein ähnlicher Hand-Post
+    nie einen echten neuen Clip blockiert."""
+    kandidaten = [t for t in (titel, (karte or {}).get("titel"), (karte or {}).get("hook")) if t]
+    for e in fremd:
+        if e.get("plattform", "tiktok") != plattform or e.get("status") not in ("geplant", "entwurf"):
+            continue
+        text = " ".join(_woerter(_hashfrei(e.get("text"))))
+        for t in kandidaten:
+            w = _woerter(_hashfrei(t))
+            if len(w) >= 3 and f" {' '.join(w)} " in f" {text} ":
+                return e
+    return None
+
+
+def vorrat_ausweichen(geplant, fremd, plattform, jetzt_utc=None, cfg=CONFIG):
+    """Vorrat-Einträge (noch nicht bei Buffer), deren Slot Marvin inzwischen von Hand belegt hat, rücken auf den
+    nächsten freien Slot. Gibt Protokollzeilen zurück. Fremde Posts werden nie verschoben."""
+    jetzt = jetzt_utc or dt.datetime.now(dt.timezone.utc)
+    tz = ZoneInfo(cfg["zeitzone"])
+    hand = {e["slot_utc"] for e in fremd if e.get("plattform", "tiktok") == plattform and e.get("slot_utc")}
+    hand_t = {_utc(x) for x in hand}
+    protokoll = []
+    for g in sorted([g for g in geplant if g.get("vorrat") and g.get("status") == "geplant"
+                     and g.get("plattform", "tiktok") == plattform], key=lambda x: x.get("slot_utc") or ""):
+        if _utc(g.get("slot_utc")) not in hand_t:
+            continue
+        belegt = {x["slot_utc"] for x in geplant + fremd if x is not g and x.get("plattform", "tiktok") == plattform
+                  and x.get("status") in ("geplant", "gesendet") and x.get("slot_utc")}
+        alt = g.get("slot_lokal")
+        neu = naechster_slot(belegt, jetzt, cfg, plattform=plattform, ab_utc=_utc(g.get("slot_utc")))
+        lokal = neu.astimezone(tz)
+        g.update(slot_utc=neu.isoformat(), slot=lokal.strftime("%H:%M"), slot_lokal=lokal.strftime("%a %d.%m. %H:%M"),
+                 hinweis=f"Slot {alt} von Hand in Buffer belegt, verschoben auf {lokal.strftime('%a %d.%m. %H:%M')}.")
+        protokoll.append(f"ausgewichen {plattform} {alt} -> {g['slot_lokal']}  {g.get('titel')}")
     return protokoll
 
 

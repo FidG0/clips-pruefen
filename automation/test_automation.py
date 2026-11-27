@@ -558,7 +558,162 @@ class Vorrat(unittest.TestCase):
         ig = [g for g in z["geplant"] if g.get("karte_id") == "neu1" and g["plattform"] == "instagram"][0]
         self.assertFalse(ig.get("vorrat"))                         # Instagram hatte Platz: sofort zu Buffer
         self.assertEqual(ig["buffer_id"], "neuinstagram")
-        self.assertEqual(z["vorrat"]["tiktok"], {"im_vorrat": 1, "buffer_frei": 0})
+        self.assertEqual(z["vorrat"]["tiktok"], {"im_vorrat": 1, "buffer_frei": 0, "von_hand": 0})
+
+
+class VonHand(unittest.TestCase):
+    """27.11. (Marvin: will weiterhin auch manuell Dinge in den Kalender machen): Hand-Posts zählen mit, werden nie angefasst."""
+    jetzt = dt.datetime(2026, 11, 27, 12, 0, tzinfo=UTC)   # 13:00 Berlin
+    kp = {"ct": "tiktok", "ci": "instagram"}
+
+    def _post(self, pid, lokal, kanal="ct", text="Mein eigener Clip #fyp"):
+        h, m = map(int, lokal.split(":"))
+        t = dt.datetime(2026, 11, 28, h, m, tzinfo=BER).astimezone(UTC)
+        return {"id": pid, "channelId": kanal, "dueAt": t.strftime("%Y-%m-%dT%H:%M:%S.000Z"), "text": text}
+
+    def test_fremde_werden_erkannt_und_slot_gefangen(self):
+        eigene = [{"plattform": "tiktok", "status": "geplant", "buffer_id": "b1",
+                   "slot_utc": dt.datetime(2026, 11, 28, 11, 0, tzinfo=BER).astimezone(UTC).isoformat()}]
+        fremd, versch = lib.fremde_posts([self._post("b1", "11:00"), self._post("h1", "16:20"), self._post("h2", "14:30"),
+                                          {"id": "d", "channelId": "ci", "dueAt": None, "text": "Entwurf"},
+                                          self._post("x", "13:00", kanal="unbekannt")], eigene, self.kp)
+        self.assertEqual(versch, [])
+        self.assertEqual([e["buffer_id"] for e in fremd], ["h1", "h2", "d"])
+        self.assertTrue(all(e["fremd"] for e in fremd))
+        lok = [dt.datetime.fromisoformat(e["slot_utc"]).astimezone(BER).strftime("%H:%M") for e in fremd[:2]]
+        self.assertEqual(lok, ["16:00", "14:30"])   # 16:20 belegt den 16-Uhr-Slot, 14:30 liegt zu weit weg
+        self.assertEqual(fremd[2]["status"], "entwurf")
+
+    def test_von_hand_verschobener_eigener_post(self):
+        g = {"plattform": "tiktok", "status": "geplant", "buffer_id": "b1", "titel": "X",
+             "slot_utc": dt.datetime(2026, 11, 28, 11, 0, tzinfo=BER).astimezone(UTC).isoformat()}
+        fremd, versch = lib.fremde_posts([self._post("b1", "19:00")], [g], self.kp)
+        self.assertEqual(fremd, [])
+        self.assertEqual(versch, [g])
+        self.assertEqual(dt.datetime.fromisoformat(g["slot_utc"]).astimezone(BER).strftime("%H:%M"), "19:00")
+        self.assertIn("von Hand", g["hinweis"])
+
+    def test_zaehlen_bei_grenze_und_slots(self):
+        fremd, _ = lib.fremde_posts([self._post(f"h{i}", s) for i, s in enumerate(["11:00", "13:00", "16:00"])], [], self.kp)
+        eigene = [{"plattform": "tiktok", "status": "geplant", "buffer_id": f"b{i}",
+                   "slot_utc": (self.jetzt + dt.timedelta(days=3, hours=i)).isoformat()} for i in range(6)]
+        self.assertEqual(lib.buffer_frei(eigene, "tiktok", self.jetzt), 4)
+        self.assertEqual(lib.buffer_frei(eigene + fremd, "tiktok", self.jetzt), 1)
+        belegt = {e["slot_utc"] for e in fremd}
+        slot = lib.naechster_slot(belegt, dt.datetime(2026, 11, 27, 23, 0, tzinfo=UTC), plattform="tiktok")
+        self.assertEqual(slot.astimezone(BER).strftime("%d. %H:%M"), "28. 19:00")
+
+    def test_doppelt_nur_bei_echtem_treffer(self):
+        fremd, _ = lib.fremde_posts([self._post("h1", "11:00", text="NPC fährt gegen Laterne 😂 #gta6 #zarbex"),
+                                     self._post("h2", "13:00", kanal="ci", text="Ganz anderer Clip")], [], self.kp)
+        k = {"titel": "NPC fährt gegen Laterne"}
+        self.assertEqual(lib.fremd_doppelt(k, fremd, "tiktok")["buffer_id"], "h1")
+        self.assertIsNone(lib.fremd_doppelt(k, fremd, "instagram"))
+        self.assertIsNone(lib.fremd_doppelt({"titel": "Laterne"}, fremd, "tiktok"))          # zu kurz: blockiert nichts
+        self.assertIsNone(lib.fremd_doppelt({"titel": "NPC fährt gegen Baum"}, fremd, "tiktok"))
+
+    def test_vorrat_weicht_hand_post_aus(self):
+        fremd, _ = lib.fremde_posts([self._post("h1", "16:00")], [], self.kp)
+        v = {"plattform": "tiktok", "status": "geplant", "vorrat": True, "titel": "V", "slot_lokal": "Sa 16:00",
+             "slot_utc": fremd[0]["slot_utc"]}
+        log = lib.vorrat_ausweichen([v], fremd, "tiktok", self.jetzt)
+        self.assertEqual(len(log), 1)
+        self.assertEqual(dt.datetime.fromisoformat(v["slot_utc"]).astimezone(BER).strftime("%d. %H:%M"), "28. 19:00")
+        self.assertEqual(fremd[0]["slot_utc"], self._utc("16:00"))   # der Hand-Post bleibt, wo er ist
+
+    def _utc(self, lokal):
+        h, m = map(int, lokal.split(":"))
+        return dt.datetime(2026, 11, 28, h, m, tzinfo=BER).astimezone(UTC).isoformat()
+
+    def test_live_lauf_fasst_hand_posts_nie_an(self):
+        import os
+        import posten
+        jetzt = dt.datetime.now(UTC)
+        hand_t = [(jetzt + dt.timedelta(hours=5 + 24 * i)) for i in range(9)]
+        eigen = [{"auftrag_id": 1, "karte_id": "alt", "plattform": "tiktok", "status": "geplant", "buffer_id": "b0", "titel": "Alt",
+                  "slot_utc": (jetzt + dt.timedelta(hours=30)).isoformat()}]
+
+        class FakeSb:
+            gespeichert = {}
+
+            def info_lesen(self, k, d=None):
+                if k == "posten_regeln":
+                    return {"youtube_entscheid_stunden": 0}
+                if k == "posting":
+                    return {"geplant": [dict(g) for g in eigen], "buffer": {"geprueft": jetzt.isoformat()}}
+                if k == "posten_stopp":
+                    return {"bis_auftrag": 1}   # Stopp löscht eigene alte Posts, darf Hand-Posts aber nie treffen
+                return {}
+
+            def info_schreiben(self, k, w):
+                FakeSb.gespeichert[k] = w
+
+            def holen(self, t, q):
+                import urllib.parse
+                if t != "auftraege" or "posten" not in urllib.parse.unquote(q):
+                    return []
+                return [{"id": 20, "karte_id": "neu1", "kommentar": "[posten]", "titel": None,
+                         "karten": {"titel": "NPC fährt gegen Laterne", "kanal": "Zarbex", "datei": "a.mp4",
+                                    "checks": {"ton_sync": {"status": "gruen"}}}},
+                        {"id": 21, "karte_id": "neu2", "kommentar": "[posten]", "titel": None,
+                         "karten": {"titel": "Monte verliert gegen den Bus", "kanal": "Montanablack", "datei": "b.mp4",
+                                    "checks": {"ton_sync": {"status": "gruen"}}}}]
+
+            def signierter_link(self, b, p, s):
+                return "https://x/" + p
+
+        class FakeBuf:
+            geplant, geloescht, bearbeitet = [], [], []
+
+            def kanaele(self, name):
+                return "org", {p: {"id": "c" + p} for p in ("tiktok", "instagram", "youtube")}
+
+            def post_ids(self, org, ids, status, max_seiten=1):
+                return ({"b0"} | {f"h{i}" for i in range(9)}) if "scheduled" in status else set()
+
+            def offene_posts(self, org, ids, max_seiten=4):
+                posts = [{"id": f"h{i}", "channelId": "ctiktok", "dueAt": t.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                          "text": "Eigener Upload von Marvin"} for i, t in enumerate(hand_t)]
+                posts.append({"id": "hx", "channelId": "cinstagram", "dueAt": hand_t[0].strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                              "text": "NPC fährt gegen Laterne 😂 #gta6"})
+                posts.append({"id": "b0", "channelId": "ctiktok", "dueAt": eigen[0]["slot_utc"], "text": "Alt"})
+                return posts
+
+            def post_planen(self, kanal, text, link, slot, meta):
+                FakeBuf.geplant.append((kanal, slot))
+                return {"id": f"neu{len(FakeBuf.geplant)}"}
+
+            def post_loeschen(self, i):
+                FakeBuf.geloescht.append(i)
+
+            def post_bearbeiten(self, i, text, metadata=None):
+                FakeBuf.bearbeitet.append(i)
+
+        alt = (posten.Supabase, posten.Buffer, posten.live)
+        posten.Supabase, posten.Buffer, posten.live = FakeSb, FakeBuf, (lambda: True)
+        os.environ.pop("BUFFER_LIVE", None)
+        try:
+            posten.main()
+        finally:
+            posten.Supabase, posten.Buffer, posten.live = alt
+        z = FakeSb.gespeichert["posting"]
+        hand_ids = {f"h{i}" for i in range(9)} | {"hx"}
+        self.assertFalse(hand_ids & set(FakeBuf.geloescht))      # nie gelöscht
+        self.assertFalse(hand_ids & set(FakeBuf.bearbeitet))     # nie bearbeitet
+        self.assertIn("b0", FakeBuf.geloescht)                   # eigener Post vor dem Stopp wird wie bisher gelöscht
+        self.assertFalse(any(g.get("fremd") for g in z["geplant"]))
+        self.assertEqual(len(z["buffer_fremd"]), 10)
+        # TikTok: 9 Hand-Posts, Grenze 10: genau einer der neuen Clips geht zu Buffer, der andere wartet im Vorrat
+        tt = [g for g in z["geplant"] if g.get("karte_id") in ("neu1", "neu2") and g["plattform"] == "tiktok"]
+        self.assertEqual(sorted(bool(g.get("vorrat")) for g in tt), [False, True])
+        self.assertEqual(z["vorrat"]["tiktok"]["buffer_frei"], 0)
+        self.assertEqual(z["vorrat"]["tiktok"]["von_hand"], 9)
+        hand_slots = {lib._slot_fangen(t).isoformat() for t in hand_t}
+        self.assertFalse(any(g["slot_utc"] in hand_slots for g in tt))   # kein Clip auf einem Hand-Slot
+        # Instagram: derselbe Clip liegt schon von Hand dort, kein Doppelpost
+        ig = [g for g in z["geplant"] if g.get("karte_id") == "neu1" and g["plattform"] == "instagram"]
+        self.assertEqual(ig, [])
+        self.assertTrue(any(g.get("karte_id") == "neu2" and g["plattform"] == "instagram" for g in z["geplant"]))
 
 
 if __name__ == "__main__":
