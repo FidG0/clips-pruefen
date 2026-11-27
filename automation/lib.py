@@ -301,8 +301,8 @@ def buffer_voll(geplant, plattform, jetzt_utc=None, cfg=CONFIG):
     jetzt = jetzt_utc or dt.datetime.now(dt.timezone.utc)
     offen = 0
     for g in geplant:
-        if g.get("plattform", "tiktok") != plattform or g.get("status") != "geplant" or g.get("weg") == "direkt":
-            continue
+        if g.get("plattform", "tiktok") != plattform or g.get("status") != "geplant" or g.get("weg") == "direkt" or g.get("vorrat"):
+            continue   # 27.11.: Vorrat-Einträge liegen nur bei uns, nicht in Buffer
         try:
             if dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00")) > jetzt:
                 offen += 1
@@ -311,6 +311,72 @@ def buffer_voll(geplant, plattform, jetzt_utc=None, cfg=CONFIG):
     if offen >= grenze:
         return f"Buffer Free: schon {offen} von {grenze} Posts auf {plattform} geplant. Wird nach dem nächsten gesendeten Post neu versucht."
     return None
+
+
+
+# ---------------------------------------------------------------- Vorrat (27.11., Rolling Window für Buffer Free)
+# Buffer Free hält höchstens 10 geplante Posts je Kanal, gesendete geben den Platz sofort wieder frei
+# (buffer.com/pricing: "10 scheduled posts per channel - refill anytime"). Darum bekommt jede Freigabe ihren Slot sofort
+# (Kalender für 7 Tage voll), liegt aber als Vorrat-Eintrag bei uns (status "geplant", vorrat True, keine buffer_id).
+# Jeder Lauf (alle 15 Min) schiebt die Vorrat-Einträge mit den frühesten Slots nach, bis Buffer wieder 10 hat.
+
+def buffer_frei(geplant, plattform, jetzt_utc=None, cfg=CONFIG):
+    """Wie viele Posts Buffer auf diesem Kanal gerade noch annimmt (ohne Grenze: 999)."""
+    grenze = cfg.get("buffer_max_geplant")
+    if not grenze:
+        return 999
+    jetzt = jetzt_utc or dt.datetime.now(dt.timezone.utc)
+    offen = 0
+    for g in geplant:
+        if g.get("plattform", "tiktok") != plattform or g.get("status") != "geplant" or g.get("weg") == "direkt" or g.get("vorrat"):
+            continue
+        try:
+            if dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00")) > jetzt:
+                offen += 1
+        except (KeyError, ValueError):
+            offen += 1
+    return max(0, grenze - int(cfg.get("buffer_reserve", 0)) - offen)
+
+
+def vorrat_nachschieben(geplant, plattform, senden, jetzt_utc=None, cfg=CONFIG, max_versuche=4):
+    """Schiebt Vorrat-Einträge einer Plattform in Slot-Reihenfolge zu Buffer, solange Platz ist.
+
+    senden(e) plant e bei Buffer und setzt e["buffer_id"] (oder status "fehler"). Verpasste Slots (Lauf ausgefallen,
+    Buffer war voll) rücken auf den nächsten freien Slot. Ein Fehler kostet einen Versuch, nach max_versuche bleibt
+    der Eintrag auf "fehler". Gibt die Liste der Zeilen für das Protokoll zurück."""
+    jetzt = jetzt_utc or dt.datetime.now(dt.timezone.utc)
+    frueh = jetzt + dt.timedelta(minutes=cfg["mindest_vorlauf_minuten"])
+    tz = ZoneInfo(cfg["zeitzone"])
+    vorrat = [g for g in geplant if g.get("vorrat") and g.get("status") == "geplant" and g.get("plattform", "tiktok") == plattform]
+    protokoll = []
+    for g in sorted(vorrat, key=lambda x: x.get("slot_utc") or ""):
+        try:
+            slot = dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            slot = None
+        if slot is None or slot < frueh:
+            belegt = {x["slot_utc"] for x in geplant if x is not g and x.get("plattform", "tiktok") == plattform
+                      and x.get("status") in ("geplant", "gesendet") and x.get("slot_utc")}
+            neu = naechster_slot(belegt, jetzt, cfg, plattform=plattform)
+            alt = g.get("slot_lokal")
+            lokal = neu.astimezone(tz)
+            g.update(slot_utc=neu.isoformat(), slot=lokal.strftime("%H:%M"), slot_lokal=lokal.strftime("%a %d.%m. %H:%M"),
+                     hinweis=f"Slot {alt} verpasst (Buffer war voll oder Lauf ausgefallen), verschoben auf {lokal.strftime('%a %d.%m. %H:%M')}.")
+            protokoll.append(f"verschoben {plattform} {alt} -> {g['slot_lokal']}  {g.get('titel')}")
+    vorrat = sorted(vorrat, key=lambda x: x.get("slot_utc") or "")
+    frei = buffer_frei(geplant, plattform, jetzt, cfg)
+    for g in vorrat[:frei]:
+        senden(g)
+        if g.get("status") == "geplant" and (g.get("buffer_id") or g.get("youtube_id")):
+            g.pop("vorrat", None)
+            g["nachgeschoben"] = jetzt.isoformat()
+            protokoll.append(f"nachgeschoben {plattform} {g.get('slot_lokal')}  {g.get('titel')}")
+            continue
+        g["versuche"] = int(g.get("versuche") or 0) + 1
+        if g["versuche"] < max_versuche:   # nächster Lauf versucht es wieder, Slot bleibt
+            g.update(status="geplant", vorrat_fehler=g.pop("fehler", None))
+        protokoll.append(f"fehler {plattform} {g.get('slot_lokal')} Versuch {g['versuche']}: {g.get('fehler') or g.get('vorrat_fehler')}  {g.get('titel')}")
+    return protokoll
 
 
 def slot_pruefen(slot_utc, belegt_utc, jetzt_utc=None, cfg=CONFIG, plattform=None):

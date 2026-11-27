@@ -444,6 +444,123 @@ class Zuruecknehmen(unittest.TestCase):
         self.assertIsNone(lib.rueckzug_plattformen("[rausnehmen]"))
 
 
+class Vorrat(unittest.TestCase):
+    """27.11. Rolling Window: Buffer bekommt nur die nächsten 10, der Rest wartet mit festem Slot im Vorrat."""
+    jetzt = dt.datetime(2026, 11, 27, 12, 0, tzinfo=UTC)   # 13:00 Berlin
+
+    def _g(self, stunden, **x):
+        return {"plattform": "tiktok", "status": "geplant", "titel": f"Clip {stunden}",
+                "slot_utc": (self.jetzt + dt.timedelta(hours=stunden)).isoformat(), "slot_lokal": f"+{stunden}h", **x}
+
+    def test_buffer_frei_zaehlt_vorrat_nicht(self):
+        g = [self._g(i + 1, buffer_id=f"b{i}") for i in range(8)] + [self._g(30 + i, vorrat=True) for i in range(5)]
+        self.assertEqual(lib.buffer_frei(g, "tiktok", self.jetzt), 2)
+        self.assertIsNone(lib.buffer_voll(g, "tiktok", self.jetzt))
+        self.assertEqual(lib.buffer_frei(g, "instagram", self.jetzt), 10)
+
+    def test_frueheste_zuerst_bis_zehn(self):
+        g = [self._g(i + 1, buffer_id=f"b{i}") for i in range(8)]
+        vorrat = [self._g(h, vorrat=True) for h in (80, 30, 50, 40)]
+        g += vorrat
+        gesendet = []
+
+        def senden(e):
+            e["buffer_id"] = "neu" + e["titel"]
+            gesendet.append(e["titel"])
+        log = lib.vorrat_nachschieben(g, "tiktok", senden, self.jetzt)
+        self.assertEqual(gesendet, ["Clip 30", "Clip 40"])
+        self.assertEqual(len(log), 2)
+        self.assertEqual(lib.buffer_frei(g, "tiktok", self.jetzt), 0)
+        self.assertEqual(sum(1 for x in g if x.get("vorrat")), 2)
+        self.assertFalse(lib.vorrat_nachschieben(g, "tiktok", senden, self.jetzt))   # voll: nichts passiert
+
+    def test_verpasster_slot_rueckt_nach(self):
+        alt = self._g(-2, vorrat=True)
+        g = [alt]
+        lib.vorrat_nachschieben(g, "tiktok", lambda e: e.update(buffer_id="x"), self.jetzt)
+        neu = dt.datetime.fromisoformat(alt["slot_utc"])
+        self.assertGreater(neu, self.jetzt)
+        self.assertIn("verpasst", alt["hinweis"])
+        self.assertEqual(alt["buffer_id"], "x")
+
+    def test_fehler_wird_wiederholt(self):
+        e = self._g(5, vorrat=True)
+        g = [e]
+
+        def kaputt(x):
+            x.update(status="fehler", fehler="HTTP 500")
+        for _ in range(3):
+            lib.vorrat_nachschieben(g, "tiktok", kaputt, self.jetzt)
+            self.assertEqual(e["status"], "geplant")
+            self.assertTrue(e["vorrat"])
+        lib.vorrat_nachschieben(g, "tiktok", kaputt, self.jetzt)
+        self.assertEqual(e["status"], "fehler")
+
+    def test_live_lauf_voller_buffer_sperrt_nicht(self):
+        import os
+        import posten
+        jetzt = dt.datetime.now(UTC)
+        voll = [{"auftrag_id": 1, "karte_id": f"alt{i}", "plattform": "tiktok", "status": "geplant", "buffer_id": f"b{i}",
+                 "slot_utc": (jetzt + dt.timedelta(hours=3 + i)).isoformat()} for i in range(10)]
+
+        class FakeSb:
+            gespeichert = {}
+
+            def info_lesen(self, k, d=None):
+                if k == "posten_regeln":
+                    return {"youtube_entscheid_stunden": 0}
+                if k == "posting":
+                    return {"geplant": [dict(g) for g in voll], "buffer": {"geprueft": jetzt.isoformat()}}
+                return {}
+
+            def info_schreiben(self, k, w):
+                FakeSb.gespeichert[k] = w
+
+            def holen(self, t, q):
+                if t != "auftraege" or "posten" not in urllib_q(q):
+                    return []
+                return [{"id": 20, "karte_id": "neu1", "kommentar": "[posten]", "titel": None,
+                         "karten": {"titel": "NPC fährt gegen Laterne", "kanal": "Zarbex", "datei": "a.mp4",
+                                    "checks": {"ton_sync": {"status": "gruen"}}}}]
+
+            def signierter_link(self, b, p, s):
+                return "https://x/" + p
+
+        class FakeBuf:
+            geplant = []
+
+            def kanaele(self, name):
+                return "org", {p: {"id": p} for p in ("tiktok", "instagram", "youtube")}
+
+            def post_ids(self, org, ids, status, max_seiten=1):
+                return {g["buffer_id"] for g in voll} if "scheduled" in status else set()
+
+            def post_planen(self, kanal, text, link, slot, meta):
+                FakeBuf.geplant.append(kanal)
+                return {"id": "neu" + kanal}
+
+        def urllib_q(q):
+            import urllib.parse
+            return urllib.parse.unquote(q)
+        alt = (posten.Supabase, posten.Buffer, posten.live)
+        posten.Supabase, posten.Buffer, posten.live = FakeSb, FakeBuf, (lambda: True)
+        os.environ.pop("BUFFER_LIVE", None)
+        try:
+            posten.main()
+        finally:
+            posten.Supabase, posten.Buffer, posten.live = alt
+        z = FakeSb.gespeichert["posting"]
+        self.assertIn(20, z["erledigte_auftraege"])               # Freigabe ist angenommen, nicht „wartet“
+        self.assertEqual(z["gesperrt"], [])
+        tt = [g for g in z["geplant"] if g.get("karte_id") == "neu1" and g["plattform"] == "tiktok"][0]
+        self.assertTrue(tt["vorrat"])                              # TikTok voll: Vorrat mit festem Slot
+        self.assertNotIn("tiktok", FakeBuf.geplant)
+        ig = [g for g in z["geplant"] if g.get("karte_id") == "neu1" and g["plattform"] == "instagram"][0]
+        self.assertFalse(ig.get("vorrat"))                         # Instagram hatte Platz: sofort zu Buffer
+        self.assertEqual(ig["buffer_id"], "neuinstagram")
+        self.assertEqual(z["vorrat"]["tiktok"], {"im_vorrat": 1, "buffer_frei": 0})
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -460,10 +460,10 @@ async function slotsFuellen() {
       if (frei) opt.push(`<option value="${t.toISOString()}">${t.toLocaleString("de-DE", { timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}${BONUS.includes(s) ? " ★ Bonus" : ""}</option>`);
     }
   }
-  const voll = PLATTF.filter(p => slotCache.geplant.filter(g => (g.plattform || "tiktok") === p && g.status === "geplant" && new Date(g.slot_utc) > new Date()).length >= BUFFER_MAX);
+  const voll = PLATTF.filter(p => slotCache.geplant.filter(g => (g.plattform || "tiktok") === p && g.status === "geplant" && !g.vorrat && new Date(g.slot_utc) > new Date()).length >= BUFFER_MAX);
   // 25.11. abends (Marvin): Bonus jetzt geht immer, Abstand und „1 Bonus pro Tag“ sind nur Hinweise (lib.sofort_warnungen).
   opt.unshift(`<option value="sofort">⚡ Bonus jetzt sofort posten${bonusWarnungen().length ? " (mit Hinweis)" : ""}</option>`);
-  if (voll.length) opt.unshift(`<option disabled>Buffer Free voll (${BUFFER_MAX} geplant): Freigabe wartet, bis ein Post raus ist</option>`);
+  if (voll.length) opt.unshift(`<option disabled>Buffer Free voll (${BUFFER_MAX} geplant): neuer Post wartet im Vorrat und rückt automatisch nach</option>`);
   document.querySelectorAll("#slotWahl, select.fslot").forEach(sel => { if (!sel.dataset.gefuellt) { sel.dataset.gefuellt = "1"; sel.insertAdjacentHTML("beforeend", opt.join("")); } });
 }
 // 25.11. abends: Vorschau von Titel, Beschreibung und Hashtags je Plattform vor dem Posten, editierbar.
