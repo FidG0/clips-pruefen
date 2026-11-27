@@ -79,6 +79,11 @@ class Supabase:
         _anfrage(f"{self.url}/rest/v1/info?on_conflict=schluessel", "POST", {"schluessel": schluessel, "wert": wert},
                  {**self.kopf, "Prefer": "resolution=merge-duplicates,return=minimal"})
 
+    def kopieren(self, bucket, quelle, ziel):
+        """27.11.: Datei im selben Bucket kopieren (Storage copy). Für eingefrorene Fassungen freigegebener Clips."""
+        return _anfrage(f"{self.url}/storage/v1/object/copy", "POST",
+                        {"bucketId": bucket, "sourceKey": quelle, "destinationKey": ziel}, self.kopf)
+
     def signierter_link(self, bucket, pfad, sekunden):
         pfad_q = urllib.parse.quote(pfad)
         r = _anfrage(f"{self.url}/storage/v1/object/sign/{bucket}/{pfad_q}", "POST", {"expiresIn": int(sekunden)}, self.kopf)

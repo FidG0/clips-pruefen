@@ -458,6 +458,27 @@ def videodatei(karte):
     return None, None
 
 
+def einfrieren(sb, auftrag, bucket, pfad, ist_live):
+    """27.11. (Marvin: „in posten immer die beste, zuletzt bearbeitete und bestätigte Fassung, und nichts mehr
+    verändert“): Bei der Freigabe wird die Videodatei nach eingefroren/<auftrag>_<name> kopiert, gepostet wird nur
+    noch diese Kopie. Rendert der PC die Karte später neu (Rollout, Layout, Überarbeiten), ändert das den geplanten
+    Post nicht. Eine neue Fassung braucht eine neue Freigabe. Gibt (pfad, hinweis) zurück."""
+    if not pfad or not ist_live:
+        return pfad, None
+    if pfad.startswith("eingefroren/"):
+        return pfad, None
+    ziel = f"eingefroren/{auftrag['id']}_{pfad.rsplit('/', 1)[-1]}"
+    try:
+        sb.kopieren(bucket, pfad, ziel)
+        return ziel, None
+    except Exception as fehler:   # z. B. schon kopiert (gleicher Auftrag, zweiter Lauf): dann gilt die Kopie
+        text = str(fehler)
+        if "exists" in text.lower() or "409" in text or "Duplicate" in text:
+            return ziel, None
+        print(f"nicht eingefroren {pfad}: {text[:200]}")
+        return pfad, "Fassung nicht eingefroren (Kopie fehlgeschlagen), gepostet wird die aktuelle Datei."
+
+
 def eintrag(auftrag, plattform, slot_utc, text, meta):
     k = auftrag.get("karten") or {}
     titel = auftrag.get("titel") or k.get("titel")
@@ -620,6 +641,7 @@ def main():
             print(f"gesperrt  {k.get('titel')}: {grund}")
             continue
         bucket, pfad = videodatei(k)
+        pfad, frost_hinweis = einfrieren(sb, a, bucket, pfad, ist_live)
         link_cache = {}
         wunsch = wunsch_slots(a.get("kommentar"))   # Kalender: nur gewählte Plattformen, je im gewählten Slot
         ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
@@ -690,6 +712,10 @@ def main():
                 e["bonus"] = True
             if hinweise.get(p):
                 e["hinweis"] = hinweise[p]
+            if pfad and pfad.startswith("eingefroren/"):
+                e["eingefroren"] = pfad
+            elif frost_hinweis:
+                e["hinweis"] = ((e.get("hinweis") or "") + " " + frost_hinweis).strip()
             if p in pause:   # 27.11.: Pause, auch „sofort“ wartet
                 e.update(vorrat=True, bucket=bucket, pfad=pfad, hinweis="TikTok-Pause (0 Aufrufe): wartet, bis du fortsetzt.")
             elif wunsch.get(p) == "sofort" or not ueber_buffer(p):
