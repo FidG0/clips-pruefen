@@ -315,6 +315,21 @@ def strikes_raeumen(zustand, strikes, buf, yt, ist_live):
             g["hinweis"] = f"Strike-Regel: Löschen ging nicht ({str(fehler)[:120]}), bitte von Hand."
 
 
+def youtube_schon(karte_id, eintraege, fremd=(), karte=None, titel=None):
+    """27.11. (YouTube doppelt: Asteroiden, Papaplatte Quiz je direkt UND über Buffer): Grund, warum diese Karte auf
+    YouTube nicht noch einmal raus darf, sonst None. Zählt beide Wege (direkt und Buffer), geplant UND gesendet,
+    und von Hand in Buffer gelegte YouTube-Posts mit demselben Titel. Ein YouTube-Video je Clip, für immer."""
+    for g in eintraege:
+        if g.get("karte_id") == karte_id and g.get("plattform") == "youtube" and g.get("status") in ("geplant", "gesendet", "probelauf"):
+            weg = "direkt" if g.get("weg") == "direkt" or g.get("youtube_id") else "Buffer"
+            return f"schon auf YouTube ({weg}, {g.get('slot_lokal') or g.get('slot_utc')})"
+    if karte is not None or titel:
+        e = fremd_doppelt(karte or {}, list(fremd), "youtube", titel)
+        if e:
+            return f"von Hand in Buffer schon auf YouTube ({e.get('slot_lokal')})"
+    return None
+
+
 def youtube_warte_planen(zustand, r, jetzt, senden, ist_live, probe, cfg=CONFIG):
     """25.11. (Marvin: „auf youtube dann nur die 2 besten clips“): Freigaben ohne festen YouTube-Slot warten in
     zustand.youtube_warte. Für jeden Tag wird erst kurz vorher entschieden (youtube_entscheid_stunden vor dem ersten
@@ -331,6 +346,12 @@ def youtube_warte_planen(zustand, r, jetzt, senden, ist_live, probe, cfg=CONFIG)
         else:
             frisch.append(w)
     warte[:] = frisch
+    schon = [(w, youtube_schon(w.get("karte_id"), zustand["geplant"] + probe, zustand.get("buffer_fremd") or [], w.get("karte"), w.get("titel")))
+             for w in warte]
+    for w, grund in schon:
+        if grund:
+            print(f"youtube   doppelt    {w.get('titel')}: {grund}, fällt aus der Warteschlange")
+    warte[:] = [w for w, grund in schon if not grund]
     if not warte or r["youtube_pro_tag"] <= 0:
         return
     alle = zustand["geplant"] + probe + (zustand.get("buffer_fremd") or [])   # 27.11.: Hand-Posts belegen Slots mit
@@ -347,6 +368,9 @@ def youtube_warte_planen(zustand, r, jetzt, senden, ist_live, probe, cfg=CONFIG)
         tagesende = dt.datetime(datum.year, datum.month, datum.day, 23, 59, tzinfo=tz)
         kandidaten = sorted([w for w in warte if dt.datetime.fromisoformat(w["ab_utc"]) <= tagesende], key=lambda w: -w["wert"])
         for w in kandidaten[:max(0, frei)]:
+            if youtube_schon(w.get("karte_id"), alle):   # zwei Warte-Einträge derselben Karte: nur einer geht raus
+                warte.remove(w)
+                continue
             belegt = {g["slot_utc"] for g in alle if g.get("plattform") == "youtube" and g.get("status") in ("geplant", "gesendet", "probelauf")}
             tagesanfang = dt.datetime(datum.year, datum.month, datum.day, 0, 0, tzinfo=tz)
             try:
@@ -544,6 +568,9 @@ def main():
         # 25.11.: kein Doppelpost. Ist die Karte auf einer Plattform noch geplant, entfällt diese Plattform.
         doppelt = [p for p in ziel if any(g.get("karte_id") == a["karte_id"] and g.get("plattform", "tiktok") == p
                                           and g.get("status") == "geplant" for g in zustand["geplant"] + probe)]
+        # 27.11.: YouTube nie zweimal, egal ob direkt oder über Buffer, auch nicht nach dem Senden
+        if "youtube" in ziel and "youtube" not in doppelt and youtube_schon(a["karte_id"], zustand["geplant"] + probe):
+            doppelt.append("youtube")
         # 27.11.: auch nicht, wenn Marvin denselben Clip schon von Hand in Buffer gelegt hat
         hand = [p for p in ziel if p not in doppelt and fremd_doppelt(k, fremd, p, a.get("titel"))]
         doppelt += hand
