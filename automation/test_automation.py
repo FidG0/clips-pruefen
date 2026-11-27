@@ -171,6 +171,21 @@ class TikTokProfil(unittest.TestCase):
         self.assertEqual(m["tt:771"]["meta"]["plattform"], "tiktok")
         self.assertEqual(m["tt:771"]["verlauf"]["1"]["views"], 61)
 
+    def test_nicht_auf_profil_zaehlt_nicht(self):
+        p = self.profil(1808)
+        p["stand"] = "2026-11-27T16:00:00+00:00"
+        m = {"b1": {"meta": {"plattform": "tiktok"}, "verlauf": {"1": {"views": 0}}},
+             "weg": {"meta": {"plattform": "tiktok", "gesendet": "2026-11-25T18:00:00+00:00"}, "verlauf": {"1": {"views": 0}}},
+             "frisch": {"meta": {"plattform": "tiktok", "gesendet": "2026-11-27T15:00:00+00:00"}, "verlauf": {"1": {"views": 0}}},
+             "yt": {"meta": {"plattform": "youtube", "gesendet": "2026-11-25T18:00:00+00:00"}, "verlauf": {"1": {"views": 7}}}}
+        zahlen.profil_einmischen(m, p)
+        self.assertTrue(m["weg"]["meta"]["nicht_auf_profil"])
+        self.assertEqual(m["weg"]["verlauf"], {})
+        self.assertEqual(m["frisch"]["verlauf"]["1"]["views"], 0)   # noch keine 24 h alt, bleibt
+        self.assertEqual(m["yt"]["verlauf"]["1"]["views"], 7)
+        zeilen, _ = zahlen.gruppieren(m)
+        self.assertNotIn("weg", [z["id"] for z in zeilen])
+
     def test_ohne_profil_aendert_nichts(self):
         m = {"b1": {"meta": {}, "verlauf": {"1": {"views": 5}}}}
         self.assertEqual(zahlen.profil_einmischen(m, {}), 0)
