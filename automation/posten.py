@@ -211,6 +211,13 @@ def stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt, yt=None):
                     g.update(status="storniert", hinweis="Stopp 25.11.: war in Buffer schon gelöscht.")
                     g.pop("loeschen_offen", None)
                     zeile["status"] = "war schon gelöscht"
+                elif "not allowed" in str(fehler).lower():
+                    # 27.11.: Buffer lässt veröffentlichte Posts nicht mehr löschen („Account is not allowed to perform
+                    # this action on post“). Marvin hat am 26.11. für den Gaming-Begriff-Reel „So lassen“ gewählt.
+                    # Vorher versuchte jeder Lauf (alle 15 min) erneut zu löschen. Jetzt gilt er als gesendet.
+                    g.update(status="gesendet", hinweis="Stopp 25.11.: Buffer erlaubt kein Löschen mehr (schon veröffentlicht), bleibt online.")
+                    g.pop("loeschen_offen", None)
+                    zeile["status"] = "schon veröffentlicht, Buffer erlaubt kein Löschen, bleibt"
                 else:
                     zeile["status"] = "Fehler: " + str(fehler)[:160]
         ergebnis.append(zeile)

@@ -659,6 +659,23 @@ class Stopp(unittest.TestCase):
                               Buf(), False, [], jetzt)
         self.assertEqual(Buf.weg, [])                            # Probelauf löscht nie
 
+        class BufVeroeffentlicht:   # 27.11.: Buffer verweigert das Löschen eines schon veröffentlichten Posts
+            def post_loeschen(self, i):
+                raise RuntimeError("Account is not allowed to perform this action on post")
+
+        z2 = {"erledigte_auftraege": [], "geplant": [{"auftrag_id": 5, "status": "geplant", "buffer_id": "x", "loeschen_offen": True}]}
+        posten.stopp_anwenden(Sb(), z2, BufVeroeffentlicht(), True, [], jetzt)
+        self.assertEqual(z2["geplant"][0]["status"], "gesendet")     # nicht mehr bei jedem Lauf neu versuchen
+        self.assertNotIn("loeschen_offen", z2["geplant"][0])
+        z3 = {"erledigte_auftraege": [], "geplant": [{"auftrag_id": 5, "status": "geplant", "buffer_id": "x"}]}
+
+        class BufKaputt:
+            def post_loeschen(self, i):
+                raise RuntimeError("timeout")
+
+        posten.stopp_anwenden(Sb(), z3, BufKaputt(), True, [], jetzt)
+        self.assertEqual(z3["geplant"][0]["status"], "geplant")      # andere Fehler: nächster Lauf versucht es wieder
+
 
 class VersetztUndBeste(unittest.TestCase):
     def test_reels_einen_tag_nach_tiktok(self):
