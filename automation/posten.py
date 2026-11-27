@@ -9,13 +9,14 @@ Ohne BUFFER_LIVE=ja nur Probelauf: info.posting.probelauf zeigt, was geplant wü
 Freigabe = Auftrag mit aktion 'behalten' und Kommentar, der mit '[posten]' beginnt
 (so bleibt die bestehende PC-Verarbeitung von 'behalten' unverändert gültig).
 """
+import json
 import datetime as dt
 import re
 import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 
-from lib import (CONFIG, Buffer, Supabase, YouTube, buffer_frei, vorrat_nachschieben, clip_wert, regeln, strike_sperre, ist_bonus, sofort_slot, sofort_warnungen, format_von, live, metadata_bauen,
+from lib import (CONFIG, Buffer, Supabase, YouTube, buffer_frei, vorrat_nachschieben, fremde_posts, fremd_doppelt, vorrat_ausweichen, clip_wert, regeln, strike_sperre, ist_bonus, sofort_slot, sofort_warnungen, format_von, live, metadata_bauen,
                  naechster_slot, slot_pruefen, sperrgrund, texte_aus_kommentar, texte_bauen, texte_pruefen, texte_text, titel_typ,
                  wunsch_slots, RAUSNEHMEN, RUECKZUG, rueckzug_art, rueckzug_plattformen)
 
@@ -332,7 +333,7 @@ def youtube_warte_planen(zustand, r, jetzt, senden, ist_live, probe, cfg=CONFIG)
     warte[:] = frisch
     if not warte or r["youtube_pro_tag"] <= 0:
         return
-    alle = zustand["geplant"] + probe
+    alle = zustand["geplant"] + probe + (zustand.get("buffer_fremd") or [])   # 27.11.: Hand-Posts belegen Slots mit
     normale = [s for s in cfg["slots"] if s not in cfg.get("bonus_slots", [])]
     for tag in range(0, 8):
         datum = (jetzt.astimezone(tz) + dt.timedelta(days=tag)).date()
@@ -361,7 +362,7 @@ def youtube_warte_planen(zustand, r, jetzt, senden, ist_live, probe, cfg=CONFIG)
             else:
                 e["status"] = "probelauf"
                 probe.append(e)
-            alle = zustand["geplant"] + probe
+            alle = zustand["geplant"] + probe + (zustand.get("buffer_fremd") or [])
             print(f"youtube   {e['status']:9} {e['slot_lokal']}  {e['titel']}  (Wert {w['wert']:.0f}, beste {r['youtube_pro_tag']} des Tages)")
 
 
@@ -401,7 +402,7 @@ def belegte_slots(geplant, plattform):
 
 def main():
     sb = Supabase()
-    zustand = {**STANDARD, **(sb.info_lesen("posting", {}) or {})}
+    zustand = {**json.loads(json.dumps(STANDARD)), **(sb.info_lesen("posting", {}) or {})}   # Kopie: Listen in STANDARD nie mitverändern
     erledigt = set(zustand["erledigte_auftraege"])
     offen = offene_freigaben(sb, erledigt)
     rueck = offene_rueckzuege(sb, set(zustand.get("erledigte_rueckzuege") or []))
@@ -456,6 +457,21 @@ def main():
             buffer_abgleich(zustand, buf, org_id, kanaele)
         except Exception as fehler:   # Abgleich ist Hilfe, kein Muss
             print(f"Buffer-Abgleich nicht gelaufen: {fehler}")
+        try:   # 27.11.: von Hand geplante Posts mitzählen, nie anfassen
+            zustand["buffer_fremd"], verschoben = fremde_posts(
+                buf.offene_posts(org_id, [k["id"] for k in kanaele.values()]), zustand["geplant"],
+                {k["id"]: p for p, k in kanaele.items()})
+            zustand["buffer_fremd_geprueft"] = jetzt.isoformat()
+            for g in verschoben:
+                print(f"verschoben {g.get('plattform')} {g.get('slot_lokal')}  {g.get('titel')} (von Hand in Buffer)")
+            if zustand["buffer_fremd"]:
+                print(f"von Hand  {len(zustand['buffer_fremd'])} Posts in Buffer, zählen mit, werden nicht angefasst")
+        except Exception as fehler:   # dann gilt der letzte bekannte Stand
+            print(f"Hand-Posts nicht gelesen: {fehler}")
+    # ohne frischen Buffer-Stand: letzter bekannter, nur künftige (vergangene sind gesendet und zählen nicht mehr)
+    fremd = [e for e in (zustand.get("buffer_fremd") or [])
+             if e.get("status") == "entwurf" or (e.get("slot_utc") and dt.datetime.fromisoformat(e["slot_utc"]) > jetzt)]
+    zustand["buffer_fremd"] = fremd
 
     offen = stopp_anwenden(sb, zustand, buf, ist_live, offen, jetzt, yt)
     # 26.11. (Marvin: Clips werden unaktuell, andere posten schneller): die neuesten Momente bekommen die frühesten
@@ -502,7 +518,7 @@ def main():
     def ueber_buffer(p):
         return not (p == "youtube" and r["youtube_weg"] == "direkt")
 
-    belegt = {p: belegte_slots(zustand["geplant"], p) for p in plattformen}
+    belegt = {p: belegte_slots(zustand["geplant"] + fremd, p) for p in plattformen}
     probe, gesperrt = [], []
     for a in offen:
         weg = gesperrte_plattformen(a, rueck_sperren)
@@ -528,12 +544,15 @@ def main():
         # 25.11.: kein Doppelpost. Ist die Karte auf einer Plattform noch geplant, entfällt diese Plattform.
         doppelt = [p for p in ziel if any(g.get("karte_id") == a["karte_id"] and g.get("plattform", "tiktok") == p
                                           and g.get("status") == "geplant" for g in zustand["geplant"] + probe)]
+        # 27.11.: auch nicht, wenn Marvin denselben Clip schon von Hand in Buffer gelegt hat
+        hand = [p for p in ziel if p not in doppelt and fremd_doppelt(k, fremd, p, a.get("titel"))]
+        doppelt += hand
         ziel = [p for p in ziel if p not in doppelt]
         if doppelt:
-            print(f"doppelt   {k.get('titel')}: schon geplant auf {', '.join(doppelt)}")
+            print(f"doppelt   {k.get('titel')}: schon geplant auf {', '.join(doppelt)}" + (f" (von Hand: {', '.join(hand)})" if hand else ""))
         if not ziel:
             gesperrt.append({"auftrag_id": a["id"], "karte_id": a["karte_id"], "titel": k.get("titel"),
-                             "grund": "Schon auf allen Plattformen geplant, kein Doppelpost."})
+                             "grund": "Schon auf allen Plattformen geplant" + (" (zum Teil von Hand in Buffer)" if hand else "") + ", kein Doppelpost."})
             if ist_live:
                 zustand["erledigte_auftraege"].append(a["id"])
             continue
@@ -557,7 +576,7 @@ def main():
             ziel = [p for p in ziel if p != "youtube"]
         for p in reihe:
             if wunsch.get(p) == "sofort":   # Bonus jetzt: geht immer in wenigen Minuten raus (25.11. abends, Marvin)
-                warn = sofort_warnungen(zustand["geplant"] + probe, p)
+                warn = sofort_warnungen(zustand["geplant"] + probe + fremd, p)
                 slots[p] = sofort_slot(zustand["geplant"] + probe, p)[0]
                 if warn:
                     hinweise[p] = "Bonus trotz Hinweis gepostet: " + " ".join(warn)
@@ -621,14 +640,17 @@ def main():
                 slot = dt.datetime.fromisoformat(g["slot_utc"].replace("Z", "+00:00"))
                 return senden(g, p, slot, g.get("text"), g.get("metadata"), g.get("teile") or {}, g.get("bucket"), g.get("pfad"), {})
             try:
-                vorrat_log += vorrat_nachschieben(zustand["geplant"], p, senden_vorrat, jetzt)
+                vorrat_log += vorrat_ausweichen(zustand["geplant"], fremd, p, jetzt)
+                # die Liste ist nur zum Zählen zusammengesetzt: fremde Einträge haben nie vorrat=True, werden also nie gesendet
+                vorrat_log += vorrat_nachschieben(zustand["geplant"] + fremd, p, senden_vorrat, jetzt)
             except Exception as fehler:   # Nachschieben darf den Rest nie blockieren
                 vorrat_log.append(f"Nachschieben {p} nicht gelaufen: {str(fehler)[:200]}")
     for zeile in vorrat_log:
         print(zeile)
     zustand["vorrat"] = {p: {"im_vorrat": sum(1 for g in zustand["geplant"] if g.get("vorrat") and g.get("status") == "geplant"
                                               and g.get("plattform", "tiktok") == p),
-                             "buffer_frei": buffer_frei(zustand["geplant"], p, jetzt)}
+                             "buffer_frei": buffer_frei(zustand["geplant"] + fremd, p, jetzt),
+                             "von_hand": sum(1 for e in fremd if e.get("plattform") == p and e.get("status") == "geplant")}
                          for p in plattformen if ueber_buffer(p)}
     zustand["vorrat_log"] = (list(zustand.get("vorrat_log") or []) + [jetzt.isoformat()[:16] + " " + z for z in vorrat_log])[-60:]
 
