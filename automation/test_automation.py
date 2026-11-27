@@ -206,6 +206,43 @@ class TikTokProfil(unittest.TestCase):
         self.assertEqual(m["b1"]["verlauf"]["1"]["views"], 5)
 
 
+class YoutubeDoppel(unittest.TestCase):
+    """27.11.: Buffer spiegelt direkte YouTube-Uploads als „manuell“ gesendeten Post. Der zählt nicht doppelt."""
+
+    def metriken(self):
+        return {"yt:3JTXuTXVS5U": {"meta": {"plattform": "youtube", "gesendet": "2026-11-27T10:00:00+00:00", "weg": "direkt"},
+                                   "verlauf": {"1": {"views": 40}}},
+                "6b0954e0": {"meta": {"plattform": "youtube", "manuell": True, "gesendet": "2026-11-27T10:00:00.000Z"},
+                             "verlauf": {"1": {"views": 0}}},
+                "6b099bbf": {"meta": {"plattform": "youtube", "manuell": True, "gesendet": "2026-11-27T15:02:40.000Z"},
+                             "verlauf": {"1": {"views": 0}}},
+                "yt:b8GWUC_hPDc": {"meta": {"plattform": "youtube", "gesendet": "2026-11-27T15:00:00+00:00"}, "verlauf": {"1": {"views": 9}}},
+                "alt_manuell": {"meta": {"plattform": "youtube", "manuell": True, "gesendet": "2026-11-23T23:32:54.000Z"},
+                                "verlauf": {"1": {"views": 1561}}},
+                "spaet": {"meta": {"plattform": "youtube", "manuell": True, "gesendet": "2026-11-27T10:06:00.000Z"},
+                          "verlauf": {"1": {"views": 3}}},
+                "tiktok_manuell": {"meta": {"plattform": "tiktok", "manuell": True, "gesendet": "2026-11-27T10:00:00.000Z"},
+                                   "verlauf": {"1": {"views": 5}}}}
+
+    def test_spiegel_wird_markiert_nicht_geloescht(self):
+        m = self.metriken()
+        self.assertEqual(zahlen.youtube_doppel_markieren(m), 2)
+        self.assertEqual(m["6b0954e0"]["meta"]["doppel_von"], "yt:3JTXuTXVS5U")
+        self.assertEqual(m["6b099bbf"]["meta"]["doppel_von"], "yt:b8GWUC_hPDc")
+        self.assertIn("6b0954e0", m)   # nichts gelöscht
+        for k in ("alt_manuell", "spaet", "tiktok_manuell"):   # ohne Direkt-Upload daneben, über 5 Min, andere Plattform
+            self.assertNotIn("doppel_von", m[k]["meta"])
+
+    def test_auswertung_zaehlt_spiegel_nicht(self):
+        m = self.metriken()
+        zahlen.youtube_doppel_markieren(m)
+        ids = [z["id"] for z in zahlen.gruppieren(m)[0]]
+        self.assertNotIn("6b0954e0", ids)
+        self.assertNotIn("6b099bbf", ids)
+        self.assertIn("yt:3JTXuTXVS5U", ids)
+        self.assertIn("alt_manuell", ids)
+
+
 class Csv(unittest.TestCase):
     def test_import_deutsch(self):
         with tempfile.TemporaryDirectory() as d:
