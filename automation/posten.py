@@ -351,6 +351,22 @@ def strikes_raeumen(zustand, strikes, buf, yt, ist_live):
             g["hinweis"] = f"Strike-Regel: Löschen ging nicht ({str(fehler)[:120]}), bitte von Hand."
 
 
+def nur_plattformen(karte):
+    """27.11.: Liste der Plattformen, auf die diese Karte darf, oder None (= alle). Steht in karten.checks.nur_plattformen
+    ({"plattformen": [...]} oder direkt eine Liste) oder im Feld nur_plattformen. Gesetzt vom PC, wenn ein Clip neu
+    gebaut wird, der auf anderen Plattformen schon läuft."""
+    wert = karte.get("nur_plattformen")
+    if wert is None:
+        wert = (karte.get("checks") or {}).get("nur_plattformen")
+    if isinstance(wert, dict):
+        wert = wert.get("plattformen")
+    if wert is None:
+        return None
+    if isinstance(wert, str):
+        wert = [w.strip() for w in wert.split(",")]
+    return {str(w).strip().lower() for w in wert if str(w).strip()}
+
+
 def youtube_schon(karte_id, eintraege, fremd=(), karte=None, titel=None):
     """27.11. (YouTube doppelt: Asteroiden, Papaplatte Quiz je direkt UND über Buffer): Grund, warum diese Karte auf
     YouTube nicht noch einmal raus darf, sonst None. Zählt beide Wege (direkt und Buffer), geplant UND gesendet,
@@ -609,6 +625,9 @@ def main():
         ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
         if weg:   # 26.11.: „×“ auf einzelnen Plattformen, die fallen weg
             ziel = [p for p in ziel if p not in weg]
+        nur = nur_plattformen(k)
+        if nur is not None:   # 27.11.: neu gebauter Clip, der woanders schon läuft (z. B. Rollator: nur TikTok neu)
+            ziel = [p for p in ziel if p in nur]
         # 25.11.: kein Doppelpost. Ist die Karte auf einer Plattform noch geplant, entfällt diese Plattform.
         doppelt = [p for p in ziel if any(g.get("karte_id") == a["karte_id"] and g.get("plattform", "tiktok") == p
                                           and g.get("status") == "geplant" for g in zustand["geplant"] + probe)]

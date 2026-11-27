@@ -1319,6 +1319,42 @@ class YouTubeNieDoppelt(unittest.TestCase):
         self.assertEqual(WunschSlots.letzter_zustand.get("youtube_warte_probe") or [], [])
 
 
+class NurPlattformen(unittest.TestCase):
+    def test_feld_lesen(self):
+        import posten
+        self.assertIsNone(posten.nur_plattformen({}))
+        self.assertEqual(posten.nur_plattformen({"checks": {"nur_plattformen": {"plattformen": ["TikTok"]}}}), {"tiktok"})
+        self.assertEqual(posten.nur_plattformen({"nur_plattformen": "tiktok, instagram"}), {"tiktok", "instagram"})
+        self.assertEqual(posten.nur_plattformen({"checks": {"nur_plattformen": []}}), set())
+
+    def test_rollator_nur_tiktok(self):
+        import posten
+        orig = posten.Supabase
+        # Karte mit nur_plattformen: nur TikTok, kein Instagram, YouTube wartet nicht
+        k = {"titel": "Zarbex Rollator", "kanal": "Zarbex", "datei": "a.mp4", "checks": {"ton_sync": {"status": "gruen"},
+             "nur_plattformen": {"plattformen": ["tiktok"]}}}
+
+        class FakeSb:
+            gespeichert = {}
+
+            def info_lesen(self, key, d=None):
+                return {"youtube_entscheid_stunden": 0} if key == "posten_regeln" else {}
+
+            def info_schreiben(self, key, w):
+                FakeSb.gespeichert[key] = w
+
+            def holen(self, tab, q):
+                return [{"id": 9, "karte_id": "rollator", "kommentar": "[posten]", "titel": None, "karten": k}]
+        posten.Supabase = FakeSb
+        try:
+            posten.main()
+        finally:
+            posten.Supabase = orig
+        z = FakeSb.gespeichert["posting"]
+        self.assertEqual([e["plattform"] for e in z["probelauf"]], ["tiktok"])
+        self.assertFalse(z.get("youtube_warte_probe"))
+
+
 class YouTubeZahlen(unittest.TestCase):
     def test_analytics_in_metriken(self):
         import zahlen
