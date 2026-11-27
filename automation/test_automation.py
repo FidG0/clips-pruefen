@@ -1355,6 +1355,94 @@ class NurPlattformen(unittest.TestCase):
         self.assertFalse(z.get("youtube_warte_probe"))
 
 
+class Einfrieren(unittest.TestCase):
+    """27.11.: gepostet wird die Fassung, die Marvin freigegeben hat, als eingefrorene Kopie."""
+
+    class Sb:
+        def __init__(self, fehler=None):
+            self.kopien, self.fehler = [], fehler
+
+        def kopieren(self, b, q, z):
+            if self.fehler:
+                raise RuntimeError(self.fehler)
+            self.kopien.append((b, q, z))
+
+    def test_kopie_bei_freigabe(self):
+        import posten
+        sb = self.Sb()
+        pfad, h = posten.einfrieren(sb, {"id": 77}, "fertig", "zarbex/clip_v9.mp4", True)
+        self.assertEqual(pfad, "eingefroren/77_clip_v9.mp4")
+        self.assertIsNone(h)
+        self.assertEqual(sb.kopien, [("fertig", "zarbex/clip_v9.mp4", "eingefroren/77_clip_v9.mp4")])
+
+    def test_schon_da_und_fehler_und_probelauf(self):
+        import posten
+        self.assertEqual(posten.einfrieren(self.Sb("HTTP 400: The resource already exists"), {"id": 1}, "f", "a.mp4", True)[0],
+                         "eingefroren/1_a.mp4")
+        pfad, h = posten.einfrieren(self.Sb("HTTP 500"), {"id": 1}, "f", "a.mp4", True)
+        self.assertEqual(pfad, "a.mp4")
+        self.assertIn("nicht eingefroren", h)
+        sb = self.Sb()
+        self.assertEqual(posten.einfrieren(sb, {"id": 1}, "f", "a.mp4", False), ("a.mp4", None))
+        self.assertEqual(sb.kopien, [])
+
+    def test_live_lauf_postet_eingefrorene_fassung(self):
+        import os
+        import posten
+        links = []
+
+        class FakeSb:
+            gespeichert = {}
+
+            def info_lesen(self, k, d=None):
+                return {"youtube_entscheid_stunden": 0} if k == "posten_regeln" else {}
+
+            def info_schreiben(self, k, w):
+                FakeSb.gespeichert[k] = w
+
+            def holen(self, t, q):
+                import urllib.parse
+                if t != "auftraege" or "posten" not in urllib.parse.unquote(q):
+                    return []
+                return [{"id": 31, "karte_id": "k31", "kommentar": "[posten]", "titel": None,
+                         "karten": {"titel": "NPC fährt gegen Laterne", "kanal": "Zarbex", "datei": "zarbex/npc_v4.mp4",
+                                    "checks": {"ton_sync": {"status": "gruen"}}}}]
+
+            def kopieren(self, b, q, z):
+                pass
+
+            def signierter_link(self, b, p, s):
+                links.append(p)
+                return "https://x/" + p
+
+        class FakeBuf:
+            def kanaele(self, name):
+                return "org", {p: {"id": "c" + p} for p in ("tiktok", "instagram", "youtube")}
+
+            def post_ids(self, org, ids, status, max_seiten=1):
+                return set()
+
+            def offene_posts(self, org, ids, max_seiten=4):
+                return []
+
+            def post_planen(self, kanal, text, link, slot, meta):
+                return {"id": "neu" + kanal}
+
+        alt = (posten.Supabase, posten.Buffer, posten.live)
+        posten.Supabase, posten.Buffer, posten.live = FakeSb, FakeBuf, (lambda: True)
+        os.environ.pop("BUFFER_LIVE", None)
+        try:
+            posten.main()
+        finally:
+            posten.Supabase, posten.Buffer, posten.live = alt
+        z = FakeSb.gespeichert["posting"]
+        self.assertTrue(links)
+        self.assertTrue(all(p == "eingefroren/31_npc_v4.mp4" for p in links))
+        eig = [g for g in z["geplant"] if g.get("karte_id") == "k31"]
+        self.assertTrue(eig and all(g.get("eingefroren") == "eingefroren/31_npc_v4.mp4" for g in eig))
+        self.assertTrue(all(w["pfad"] == "eingefroren/31_npc_v4.mp4" for w in z.get("youtube_warte", []) if w["karte_id"] == "k31"))
+
+
 class YouTubeZahlen(unittest.TestCase):
     def test_analytics_in_metriken(self):
         import zahlen
