@@ -1452,6 +1452,40 @@ class TexteDrift(unittest.TestCase):
         self.assertFalse(posten.texte_gleich_ohne_tags(a, "Zarbex crasht 😂\n\n#gta6"))
 
 
+class ReuploadTor(unittest.TestCase):
+    def test_feld(self):
+        import posten
+        self.assertEqual(posten.reupload_gesperrt({}), set())
+        self.assertEqual(posten.reupload_gesperrt({"checks": {"reupload_tor": {"gesperrt": ["Reels", "youtube"]}}}),
+                         {"instagram", "youtube"})
+
+    def test_lauf_postet_nicht_auf_gesperrter_plattform(self):
+        import posten
+        k = {"titel": "NPC fährt gegen Laterne", "kanal": "Zarbex", "datei": "a.mp4",
+             "checks": {"ton_sync": {"status": "gruen"}, "reupload_tor": {"gesperrt": ["reels", "youtube"]}}}
+
+        class FakeSb:
+            gespeichert = {}
+
+            def info_lesen(self, key, d=None):
+                return {"youtube_entscheid_stunden": 0} if key == "posten_regeln" else {}
+
+            def info_schreiben(self, key, w):
+                FakeSb.gespeichert[key] = w
+
+            def holen(self, tab, q):
+                return [{"id": 9, "karte_id": "k", "kommentar": "[posten]", "titel": None, "karten": k}]
+        orig = posten.Supabase
+        posten.Supabase = FakeSb
+        try:
+            posten.main()
+        finally:
+            posten.Supabase = orig
+        z = FakeSb.gespeichert["posting"]
+        self.assertEqual([e["plattform"] for e in z["probelauf"]], ["tiktok"])
+        self.assertFalse(z.get("youtube_warte_probe"))
+
+
 class YouTubeZahlen(unittest.TestCase):
     def test_analytics_in_metriken(self):
         import zahlen
