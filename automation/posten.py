@@ -364,6 +364,19 @@ def strikes_raeumen(zustand, strikes, buf, yt, ist_live):
             g["hinweis"] = f"Strike-Regel: Löschen ging nicht ({str(fehler)[:120]}), bitte von Hand."
 
 
+def reupload_gesperrt(karte):
+    """28.11.: Plattformen, auf denen das Reupload-Tor diese Karte sperrt. Der PC schreibt das Ergebnis von
+    reupload_tor.gesperrt(kid, plattform) nach karten.checks.reupload_tor = {"gesperrt": [...]} (eigene Fassungen wie
+    Zusammenschnitt, Kollabo, Top-Liste setzt er nie). „reels“ heißt hier instagram."""
+    wert = (karte.get("checks") or {}).get("reupload_tor") or {}
+    liste = wert.get("gesperrt") if isinstance(wert, dict) else wert
+    aus = set()
+    for p in liste or []:
+        p = str(p).strip().lower()
+        aus.add({"reels": "instagram", "shorts": "youtube", "ig": "instagram", "yt": "youtube"}.get(p, p))
+    return aus
+
+
 def nur_plattformen(karte):
     """27.11.: Liste der Plattformen, auf die diese Karte darf, oder None (= alle). Steht in karten.checks.nur_plattformen
     ({"plattformen": [...]} oder direkt eine Liste) oder im Feld nur_plattformen. Gesetzt vom PC, wenn ein Clip neu
@@ -660,6 +673,10 @@ def main():
         ziel = [p for p in plattformen if p in wunsch] if wunsch else plattformen
         if weg:   # 26.11.: „×“ auf einzelnen Plattformen, die fallen weg
             ziel = [p for p in ziel if p not in weg]
+        tor = reupload_gesperrt(k)
+        if tor:   # 28.11.: Reupload-Tor (PC, tools/reupload_tor.py) sperrt Plattformen, auf denen das Original schon läuft
+            print(f"reupload  {k.get('titel')}: gesperrt auf {', '.join(sorted(tor))} (Reupload-Tor)")
+            ziel = [p for p in ziel if p not in tor]
         nur = nur_plattformen(k)
         if nur is not None:   # 27.11.: neu gebauter Clip, der woanders schon läuft (z. B. Rollator: nur TikTok neu)
             ziel = [p for p in ziel if p in nur]
